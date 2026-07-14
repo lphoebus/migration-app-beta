@@ -3,96 +3,247 @@
 
 <head>
   <meta charset="UTF-8" />
-  <link rel="icon" type="image/svg+xml" href="globe-16.svg" />
+  <link rel="icon" type="image/svg+xml" href="/migration-app-beta/globe-16.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Economic Mobility and Migration App</title>
-  <script type="module" crossorigin src="/migration-app/assets/index-Ua1bMCr9.js"></script>
-  <link rel="stylesheet" crossorigin href="/migration-app/assets/index-BQ0ImBn8.css">
+  <title>Migration Explorer (Beta)</title>
+  <script type="module" crossorigin src="/migration-app-beta/assets/index-BBLkhc1A.js"></script>
+  <link rel="modulepreload" crossorigin href="/migration-app-beta/assets/arcgis-core-C7dsn-kS.js">
+  <link rel="modulepreload" crossorigin href="/migration-app-beta/assets/vendor-DrgssHcu.js">
+  <link rel="modulepreload" crossorigin href="/migration-app-beta/assets/calcite-components-Dk52B-VQ.js">
+  <link rel="modulepreload" crossorigin href="/migration-app-beta/assets/arcgis-components-QDiZ8Hvi.js">
+  <link rel="stylesheet" crossorigin href="/migration-app-beta/assets/calcite-components-yYMZc4L2.css">
+  <link rel="stylesheet" crossorigin href="/migration-app-beta/assets/arcgis-components-DOMZ0iR1.css">
+  <link rel="stylesheet" crossorigin href="/migration-app-beta/assets/index-BoyBm0FW.css">
 </head>
 
 <body>
-  <calcite-shell content-behind>
+  <calcite-shell>
+    <!-- header section -->
     <calcite-navigation slot="header">
-      <calcite-navigation-logo slot="logo" icon="map" heading="Migration Flow"
-        description="Economic Mobility & Young Adult Migration Patterns"></calcite-navigation-logo>
+      <calcite-navigation-logo slot="logo" icon="map" heading="Migration Explorer (Beta)"
+        description="Explore Patterns of Movement">
+      </calcite-navigation-logo>
     </calcite-navigation>
 
-    <calcite-shell-panel slot="panel-start" display-mode="float-content">
+    <!-- left panel section -->
+    <calcite-shell-panel slot="panel-start" id="shell-panel-start" width="s" collapsed>
       <calcite-action-bar slot="action-bar">
-        <calcite-action data-action-id="layers" icon="layers" text="Layers"></calcite-action>
-        <calcite-action data-action-id="slider" icon="filter" text="Slider"></calcite-action>
-        <calcite-action data-action-id="fields" icon="palette" text="Field Selector"></calcite-action>
-        <calcite-action data-action-id="legend" icon="legend" text="Legend"></calcite-action>
-        <calcite-action data-action-id="bookmarks" icon="bookmark" text="Bookmarks"></calcite-action>
-        <calcite-action data-action-id="basemaps" icon="basemap" text="Basemaps"></calcite-action>
-        <calcite-action data-action-id="information" icon="information" text="Information" id="info-action"></calcite-action>
+        <calcite-action data-panel-id="layers" icon="layers" text="Layers"></calcite-action>
+        <calcite-action data-panel-id="legend" icon="legend" text="Legend"></calcite-action>
+        <calcite-action data-panel-id="bookmarks" icon="bookmark" text="Bookmarks"></calcite-action>
+        <calcite-action data-panel-id="information" icon="information" text="Information"
+          id="info-action"></calcite-action>
       </calcite-action-bar>
+      <calcite-panel heading="Layers" data-panel-id="layers" hidden closable>
+        <arcgis-layer-list reference-element="mainMap" visibility-appearance="default"></arcgis-layer-list>
+      </calcite-panel>
+      <calcite-panel heading="Legend" data-panel-id="legend" hidden closable>
+        <arcgis-legend legend-style="classic" reference-element="mainMap"></arcgis-legend>
+      </calcite-panel>
+      <calcite-panel heading="Bookmarks" data-panel-id="bookmarks" hidden closable>
+        <arcgis-bookmarks editing-enabled="false" reference-element="mainMap"></arcgis-bookmarks>
+      </calcite-panel>
+    </calcite-shell-panel>
 
-      <!-- Map-specific panels (each one provides a div for a ArcGIS Maps SDK for JavaScript widget) -->
-      <calcite-panel heading="Layers" height-scale="l" data-panel-id="layers" closed closable>
-        <arcgis-layer-list reference-element="mapEl" visibility-appearance="default"></arcgis-layer-list>
-      </calcite-panel>
-      <calcite-panel heading="Basemaps" height-scale="l" data-panel-id="basemaps" closed closable>
-        <arcgis-basemap-gallery reference-element="mapEl"></arcgis-basemap-gallery>
-      </calcite-panel>
-      <calcite-panel heading="Legend" height-scale="l" data-panel-id="legend" closed closable>
-        <arcgis-legend legend-style="classic" reference-element="mapEl"></arcgis-legend>
-      </calcite-panel>
-      <calcite-panel heading="Bookmarks" height-scale="l" data-panel-id="bookmarks" closed closable>
-        <arcgis-bookmarks editing-enabled="false" reference-element="mapEl"></arcgis-bookmarks>
-      </calcite-panel>
-      <calcite-panel heading="Migration Flow Filter" data-panel-id="slider" closed closable>
-        <calcite-block open heading="Filter Flows" description="Drag slider to filter migration flowlines">
-          <label>
-            <calcite-slider id="slider-left" min="0" max="10000" step="1000" ticks="1000" value="500" label-handles></calcite-slider>
-          </label>
-          <div id="slider-message"></div>
-          <div style="margin-top: 1em;">
-            <calcite-button id="draw-lines-btn" icon-start="pencil">Draw Lines</calcite-button>
-            <calcite-button id="clear-lines-btn" appearance="outline" icon-start="erase">Clear Lines</calcite-button>
-            <calcite-button id="reset-lines-btn" appearance="outline" icon-start="reset">Reset</calcite-button>
+    <!-- right persistent analysis panel -->
+    <calcite-shell-panel slot="panel-end" id="shell-panel-end" width="m">
+      <calcite-panel heading="Analysis Summary">
+        <div id="analysis-empty-state">
+          <calcite-notice open kind="brand" icon>
+            <div slot="title">Select a geography to begin</div>
+            <div slot="message">Choose a state or county on the map to view migration summary, flow rankings, and contributor analysis.</div>
+          </calcite-notice>
+        </div>
+
+        <div id="analysis-content" hidden>
+        <calcite-block id="analysis-surface" expanded>
+        <div id="analysis-summary-block">
+          <!-- <calcite-chip-group id="analysis-context-chips">
+            <calcite-chip id="chip-geo" scale="s">State</calcite-chip>
+            <calcite-chip id="chip-year" scale="s">2020-2021</calcite-chip>
+            <calcite-chip id="chip-tool" scale="s">Summary</calcite-chip>
+          </calcite-chip-group> -->
+
+          <calcite-label>Analysis Year
+            <calcite-select id="analysis-year-select">
+              <calcite-option value="2021">2020-2021</calcite-option>
+              <calcite-option value="2122">2021-2022</calcite-option>
+              <calcite-option value="2223" selected>2022-2023</calcite-option>
+            </calcite-select>
+          </calcite-label>
+
+          <div id="analysis-geography">Select a geography</div>
+
+          <div class="analysis-subheading">Migration Snapshot</div>
+          <div id="analysis-chart" class="analysis-chart">
+            <div class="analysis-chart-row">
+              <span class="analysis-chart-label">Inflow</span>
+              <div class="analysis-chart-track">
+                <div id="analysis-chart-inflow" class="analysis-chart-bar analysis-chart-bar-inflow"></div>
+              </div>
+              <span id="analysis-chart-inflow-value" class="analysis-chart-value">0</span>
+            </div>
+            <div class="analysis-chart-row">
+              <span class="analysis-chart-label">Outflow</span>
+              <div class="analysis-chart-track">
+                <div id="analysis-chart-outflow" class="analysis-chart-bar analysis-chart-bar-outflow"></div>
+              </div>
+              <span id="analysis-chart-outflow-value" class="analysis-chart-value">0</span>
+            </div>
+            <div class="analysis-chart-row">
+              <span class="analysis-chart-label">Net</span>
+              <div class="analysis-chart-track">
+                <div id="analysis-chart-net" class="analysis-chart-bar analysis-chart-bar-net"></div>
+              </div>
+              <span id="analysis-chart-net-value" class="analysis-chart-value">0</span>
+            </div>
+          </div>
+
+          <div id="analysis-rankings-grid">
+            <div class="analysis-ranking-col">
+              <div class="analysis-subheading" id="analysis-top-sources-title">Top Source States</div>
+              <ul id="analysis-top-sources" class="analysis-list"></ul>
+            </div>
+            <div class="analysis-ranking-col">
+              <div class="analysis-subheading" id="analysis-top-destinations-title">Top Destination States</div>
+              <ul id="analysis-top-destinations" class="analysis-list"></ul>
+            </div>
+          </div>
+
+          <div id="analysis-non-migrants" class="analysis-muted-line">0 people did not migrate</div>
+        </div>
+
+        <calcite-block heading="Analysis Tools" expanded>
+          <calcite-segmented-control id="analysis-tool-tabs">
+            <calcite-segmented-control-item value="summary" checked>Summary</calcite-segmented-control-item>
+            <calcite-segmented-control-item value="flow">Flow</calcite-segmented-control-item>
+            <calcite-segmented-control-item value="contributors">Contributors</calcite-segmented-control-item>
+            <calcite-segmented-control-item value="swipe">Swipe</calcite-segmented-control-item>
+          </calcite-segmented-control>
+
+          <div id="analysis-flow-section" hidden>
+            <div class="analysis-section-title">Flow Analysis</div>
+            <calcite-label>Direction</calcite-label>
+            <calcite-segmented-control id="flow-segmented">
+              <calcite-segmented-control-item value="inflow">Inbound</calcite-segmented-control-item>
+              <calcite-segmented-control-item value="outflow" checked>Outbound</calcite-segmented-control-item>
+            </calcite-segmented-control>
+
+            <calcite-label>Minimum Migrants</calcite-label>
+            <calcite-input-number id="flow-min-input" min="0" value="500"></calcite-input-number>
+
+            <calcite-label id="flow-hover-popup-control" layout="inline">
+              Show line hover popup
+              <calcite-checkbox id="flow-hover-popup-toggle" checked></calcite-checkbox>
+            </calcite-label>
+
+            <div class="analysis-subheading">Top Flows</div>
+            <ul id="analysis-top-flows" class="analysis-list"></ul>
+          </div>
+
+          <div id="analysis-contributors-section" hidden>
+            <div class="analysis-section-title" id="analysis-contributors-title">Contributor Analysis</div>
+            <calcite-label>Direction</calcite-label>
+            <calcite-segmented-control id="highlight-flow-toggle">
+              <calcite-segmented-control-item value="inflow" checked>Inflow</calcite-segmented-control-item>
+              <calcite-segmented-control-item value="outflow">Outflow</calcite-segmented-control-item>
+            </calcite-segmented-control>
+
+            <calcite-label>Threshold</calcite-label>
+            <calcite-input-number id="contributors-threshold" min="0" value="1000"></calcite-input-number>
+
+            <div class="analysis-stat"><span id="contributors-count-label">Highlighted States</span>: <span id="contributors-count">0</span></div>
+            <div class="analysis-stat">Migration Represented: <span id="contributors-represented">0%</span></div>
+
+            <div class="analysis-subheading" id="contributors-top-title">Top Contributing States</div>
+            <ul id="contributors-top-list" class="analysis-list"></ul>
+          </div>
+
+          <div id="analysis-swipe-section" hidden>
+            <div class="analysis-section-title">Swipe Compare</div>
+            <calcite-label>Left Map
+              <calcite-select id="swipe-left-metric"></calcite-select>
+              <calcite-select id="swipe-left-year"></calcite-select>
+            </calcite-label>
+            <calcite-label>Right Map
+              <calcite-select id="swipe-right-metric"></calcite-select>
+              <calcite-select id="swipe-right-year"></calcite-select>
+            </calcite-label>
+            <calcite-button id="activate-swipe-btn">Compare with Swipe</calcite-button>
+            <calcite-button id="close-swipe-btn" style="display:none;">Close Swipe</calcite-button>
           </div>
         </calcite-block>
-      </calcite-panel>
 
+        <calcite-switch id="migration-toggle" checked hidden></calcite-switch>
+        <calcite-switch id="highlight-toggle" checked hidden></calcite-switch>
+        <div id="migration-tools-panel" hidden></div>
+        <select id="highlight-year-select" hidden>
+          <option value="2021">2020-2021</option>
+          <option value="2122">2021-2022</option>
+          <option value="2223" selected>2022-2023</option>
+        </select>
 
-      <!-- Add this after your other calcite-panel elements -->
-      <calcite-panel heading="Select Field" data-panel-id="fields" closed closable>
-        <div class="field-select-wrapper">
-          <calcite-label>
-            Symbolize Map by Attribute:
-            <calcite-select id="field-select"></calcite-select>
-          </calcite-label>
+        </calcite-block>
         </div>
       </calcite-panel>
     </calcite-shell-panel>
-    <arcgis-map id="mapEl" item-id="d52ce04468db46eab3e70890696c9ec9" zoom="4">
-      <arcgis-zoom reference-element="mapEl"></arcgis-zoom>
-      <arcgis-home reference-element="mapEl" position="top-leading"></arcgis-home>
-    </arcgis-map>
-    <div id="alaskaViewDiv"></div>
-    <div id="hawaiiViewDiv"></div>
-    
-    <calcite-shell-panel slot="panel-end" display-mode="float-content">
-     <calcite-panel id="feature-info-panel" heading="Additional Information" closed closable>
-      <arcgis-feature id="feature-info" reference-element="#mapEl" content hide-action-bar initial-display-mode="feature"></arcgis-feature>
-    </calcite-panel> 
-    </calcite-shell-panel>
 
-    <calcite-dialog id="about-dialog" kind="info" width="m" heading="About this App" icon="information" close-button>
+    <!-- MAP SURFACE -->
+    <div id="map-surface">
+      <arcgis-map id="mainMap" item-id="e7fea3f44877440da13e001561704b90" popup-disabled>
+        <arcgis-zoom slot="top-left"></arcgis-zoom>
+        <arcgis-home slot="top-left"></arcgis-home>
+        <arcgis-swipe id="swipe-widget" position="50" hidden></arcgis-swipe>
+      </arcgis-map>
+
+      <div id="map-geo-controls">
+        <calcite-block heading="Geography" expanded>
+          <calcite-segmented-control id="geo-level-segmented">
+            <calcite-segmented-control-item value="state" checked>State</calcite-segmented-control-item>
+            <calcite-segmented-control-item value="county">County</calcite-segmented-control-item>
+          </calcite-segmented-control>
+        </calcite-block>
+      </div>
+
+      <div id="map-render-controls">
+        <calcite-block heading="Map Styling" expanded>
+          <div class="map-render-button-grid">
+            <calcite-button id="inflow-btn" scale="s">Inflow</calcite-button>
+            <calcite-button id="outflow-btn" scale="s">Outflow</calcite-button>
+            <calcite-button id="net-btn" scale="s">Net Migration</calcite-button>
+            <calcite-button id="rate-inflow-btn" scale="s">Rate Inflow</calcite-button>
+            <calcite-button id="rate-outflow-btn" scale="s">Rate Outflow</calcite-button>
+            <calcite-button id="rate-net-btn" scale="s">Rate Net</calcite-button>
+          </div>
+          <calcite-button appearance="outline" id="reset-renderer-btn" scale="s">Reset Map Rendering</calcite-button>
+          <div id="map-render-legend" hidden></div>
+        </calcite-block>
+      </div>
+
+      <div id="alaskaMap" class="inset inset-ak"></div>
+      <div id="hawaiiMap" class="inset inset-hi"></div>
+      <div id="line-hover-popup"></div>
+    </div>
+
+    <calcite-dialog id="about-dialog" kind="info" width="m">
+      <div slot="header">About This App</div>
       <div>
         <p>
-          <b>Economic Mobility and Young Adult Migration</b><br><br>
-          This application visualizes migration flows between commuting zones, allowing you to explore neighborhood characteristics and migration patterns interactively.
-          For more information on these maps or layers, visit the <a href="https://livingatlas.arcgis.com/en/browse/?q=economic%20mobility#q=economic+mobility&d=2" target="_blank" rel="noopener">Living Atlas</a> or browse additional content in the <a href="https://arcg.is/aSrmr2" target="_blank" rel="noopener">Economic Mobility Content</a> group.<br><br>
-          Use the tools on the left to filter, explore, and analyze young adult migration patterns across the United States.
+          <b>Migration Exploration App (Beta)</b><br><br>
+          This application is currently in development to help visualize flow from origin to destination and vice versa.
+          The current example focuses on migration between states and counties, allowing you to interact with the data
+          and explore patterns of inflow and outflow across the country.<br><br>
+          Data Source: <a href="https://www.irs.gov/statistics/soi-tax-stats-migration-data" target="_blank"
+            rel="noopener">Latest IRS Migration Data (2022–2023)</a><br><br>
         </p>
       </div>
-      <calcite-button slot="footer-end" id="about-dialog-close">Close</calcite-button>  
+      <calcite-button slot="footer-end" id="about-dialog-close">Close</calcite-button>
     </calcite-dialog>
-  
+
   </calcite-shell>
+
   <calcite-loader label="loading" text="Loading..."></calcite-loader>
+
 </body>
 
 </html>
