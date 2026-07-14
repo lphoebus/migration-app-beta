@@ -18,27 +18,28 @@ import Extent from "@arcgis/core/geometry/Extent";
 
 import { appState } from "./app_state";
 
-import {
-  setupActionBarToggle,
-  showShellAndHideLoader,
-  setupSlider,
-  setupClearLinesBtn,
-  setupResetSliderBtn,
-  setupAboutDialog,
-  setupPanelController
-} from "./ui";
+let setupPanelController = () => {};
+let updateHighlightFlow = async () => ({
+  highlightedCount: 0,
+  representedPct: 0,
+  topContributors: []
+});
 
-import { drawLines } from "./draw";
-import { handleOutflow, handleInflow, handleNetMigration, updateHighlightFlow } from "./migration";
-import { setupFeatureInfoClick, setupLineHoverPopup } from "./interactions";
-import { setupMigrationMappingUI} from './mapping';
-import { setupSwipeCompareComponent } from './swipe';
+let uiModulePromise;
+const loadUiModule = () => {
+  if (!uiModulePromise) {
+    uiModulePromise = import("./ui");
+  }
+  return uiModulePromise;
+};
 
 const featureInfoDiv = document.getElementById("feature-info");
 
 let stateLayer, countyLayer; // Declare variables to hold references to the layers
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
+  const uiModule = await loadUiModule();
+  setupPanelController = uiModule.setupPanelController;
   setupPanelController("shell-panel-start");
   setupPanelController("shell-panel-end");
   addYearSelectListener();
@@ -99,7 +100,38 @@ function addYearSelectListener() {
 }
 
 const mainMap = document.getElementById("mainMap");
-mainMap.addEventListener("arcgisViewReadyChange", () => {
+mainMap.addEventListener("arcgisViewReadyChange", async () => {
+  const [
+    uiModule,
+    drawModule,
+    migrationModule,
+    interactionsModule,
+    mappingModule,
+    swipeModule
+  ] = await Promise.all([
+    loadUiModule(),
+    import("./draw"),
+    import("./migration"),
+    import("./interactions"),
+    import("./mapping"),
+    import("./swipe")
+  ]);
+
+  const {
+    setupActionBarToggle,
+    showShellAndHideLoader,
+    setupSlider,
+    setupClearLinesBtn,
+    setupResetSliderBtn,
+    setupAboutDialog
+  } = uiModule;
+  const { drawLines } = drawModule;
+  const { handleOutflow, handleInflow } = migrationModule;
+  updateHighlightFlow = migrationModule.updateHighlightFlow;
+  const { setupFeatureInfoClick, setupLineHoverPopup } = interactionsModule;
+  const { setupMigrationMappingUI } = mappingModule;
+  const { setupSwipeCompareComponent } = swipeModule;
+
   const mainView = mainMap.view;
   const map = mainMap.map;
   mainMap.spatialReference = { wkid: 5070 }; // NAD_1983_Contiguous_USA_Albers
