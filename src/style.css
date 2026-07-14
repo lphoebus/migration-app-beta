@@ -1,0 +1,449 @@
+@import "@arcgis/core/assets/esri/themes/light/main.css";
+@import "@arcgis/map-components/arcgis-map-components/arcgis-map-components.css";
+@import "@esri/calcite-components/main.css";
+
+html, body, calcite-shell{
+  overflow: hidden;
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+#map-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+#mainMap {
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#alaskaMap, #hawaiiMap {
+  position: absolute;
+  z-index: 5;
+  background-color: rgba(255, 255, 255, 0.9);
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+} 
+
+#alaskaMap {
+  padding: 2px;
+  height: 225px;
+  width: 300px;
+  bottom: 20px;
+  left: 50px;
+}
+
+#hawaiiMap {
+  padding: 2px;
+  height: 135px;
+  width: 200px;
+  bottom: 20px;
+  left: 375px;
+}
+
+.calcite-loader {
+  position: absolute;
+  inset: 0;
+  z-index: 2000;
+}
+
+
+#line-hover-popup {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 0.65rem;
+  transform: translateX(-50%);
+  z-index: 30;
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  padding: 8px 12px;
+  min-width: 220px;
+  max-width: 420px;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  pointer-events: none;
+}
+
+.calcite-button {
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+}
+
+.esri-feature {
+  letter-spacing: 0em;
+    line-height: 1.55rem;
+    font-feature-settings:
+      "liga" 1,
+      "calt" 0;
+    background: #fff;
+    padding: 1em;
+}
+
+calcite-segmented-control-item:last-child {
+  margin-right: 0;
+}
+
+#migration-tools-panel {
+  display: none;
+}
+
+#analysis-summary-block {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.75rem;
+}
+
+#analysis-surface {
+  --calcite-block-padding: 0.75rem;
+  --calcite-color-foreground-1: #ffffff;
+}
+
+#analysis-empty-state:not([hidden]) {
+  display: block;
+  min-height: 420px;
+  padding: 1rem;
+}
+
+#analysis-empty-state calcite-notice {
+  margin-top: 0.5rem;
+}
+
+#analysis-content:not([hidden]) {
+  display: block;
+}
+
+#analysis-context-chips {
+  margin-bottom: 0.35rem;
+}
+
+#analysis-context-chips calcite-chip {
+  margin-right: 0.35rem;
+}
+
+#analysis-geography {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin-top: 0.25rem;
+}
+
+#analysis-rankings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+  align-items: start;
+}
+
+.analysis-ranking-col {
+  min-width: 0;
+}
+
+.analysis-ranking-col .analysis-subheading {
+  margin-top: 0.3rem;
+}
+
+.analysis-subheading {
+  font-weight: 600;
+  margin-top: 0.65rem;
+}
+
+.analysis-chart {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.analysis-chart-row {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.analysis-chart-label {
+  font-size: 0.8rem;
+  color: var(--calcite-color-text-3);
+}
+
+.analysis-chart-track {
+  height: 10px;
+  background: var(--calcite-color-foreground-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.analysis-chart-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  transition: width 200ms ease;
+}
+
+.analysis-chart-bar-inflow {
+  background: var(--calcite-color-brand);
+}
+
+.analysis-chart-bar-outflow {
+  background: var(--calcite-color-status-info);
+}
+
+.analysis-chart-bar-net-positive {
+  background: var(--calcite-color-status-success);
+}
+
+.analysis-chart-bar-net-negative {
+  background: var(--calcite-color-status-danger);
+}
+
+.analysis-chart-value {
+  font-size: 0.8rem;
+  color: var(--calcite-color-text-2);
+  min-width: 62px;
+  text-align: right;
+}
+
+#map-geo-controls {
+  position: absolute;
+  top: 0.65rem;
+  right: 0.65rem;
+  z-index: 20;
+  width: 200px;
+}
+
+#map-geo-controls calcite-block,
+#map-render-controls calcite-block {
+  --calcite-color-foreground-1: #ffffff;
+  --calcite-block-padding: 0.55rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+  border-radius: 8px;
+}
+
+#map-geo-controls calcite-segmented-control {
+  width: 100%;
+}
+
+#map-render-controls {
+  position: absolute;
+  right: 0.65rem;
+  bottom: 0.65rem;
+  z-index: 20;
+  width: 232px;
+}
+
+#map-render-controls calcite-label {
+  margin: 0;
+}
+
+#map-render-controls calcite-select {
+  margin-top: 0.25rem;
+}
+
+.map-render-button-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem;
+  margin: 0.45rem 0;
+}
+
+.map-render-button-grid calcite-button,
+#reset-renderer-btn {
+  width: 100%;
+}
+
+#map-render-legend {
+  margin-top: 0.45rem;
+  padding: 0.4rem 0.45rem;
+  border: 1px solid var(--calcite-color-border-2);
+  border-radius: 6px;
+  background: var(--calcite-color-foreground-1);
+}
+
+.map-render-legend-header {
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+  color: var(--calcite-color-text-1);
+}
+
+.map-render-legend-unit {
+  margin-top: -0.1rem;
+  margin-bottom: 0.28rem;
+  font-size: 0.66rem;
+  color: var(--calcite-color-text-3);
+}
+
+.map-render-legend-year {
+  color: var(--calcite-color-text-3);
+  font-weight: 500;
+}
+
+.map-render-legend-items {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.map-render-legend-ramp {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--calcite-color-border-2);
+}
+
+.map-render-legend-ramp-labels {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  margin-top: 0.18rem;
+  font-size: 0.68rem;
+  color: var(--calcite-color-text-3);
+}
+
+.map-render-legend-ramp-labels span:nth-child(1) {
+  text-align: left;
+}
+
+.map-render-legend-ramp-labels span:nth-child(2) {
+  text-align: center;
+}
+
+.map-render-legend-ramp-labels span:nth-child(3) {
+  text-align: right;
+}
+
+.map-render-legend-row {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.map-render-legend-dot {
+  display: inline-block;
+  border-radius: 999px;
+  background: var(--calcite-color-brand);
+}
+
+.map-render-legend-label {
+  font-size: 0.72rem;
+  color: var(--calcite-color-text-2);
+}
+
+@media (max-width: 1200px) {
+  #analysis-rankings-grid {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  #map-geo-controls,
+  #map-render-controls {
+    width: 208px;
+    right: 0.5rem;
+  }
+
+  #map-geo-controls {
+    top: 0.5rem;
+  }
+
+  #map-render-controls {
+    bottom: 0.5rem;
+  }
+
+  .map-render-button-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  #map-geo-controls,
+  #map-render-controls {
+    width: 188px;
+  }
+}
+
+.analysis-list {
+  margin: 0.15rem 0 0.5rem 1.1rem;
+  padding: 0;
+}
+
+.analysis-list li {
+  margin-bottom: 0.15rem;
+}
+
+.analysis-muted-line {
+  color: var(--calcite-color-text-3);
+  font-size: 0.78rem;
+  margin-top: 0.15rem;
+}
+
+#analysis-note {
+  color: var(--calcite-color-text-3);
+  margin-top: 0.5rem;
+}
+
+.analysis-section-title {
+  font-weight: 700;
+  margin: 0.6rem 0;
+}
+
+.analysis-stat {
+  margin-top: 0.45rem;
+}
+
+#analysis-flow-section calcite-label,
+#analysis-contributors-section calcite-label,
+#analysis-swipe-section calcite-label {
+  display: block;
+  margin-top: 0.5rem;
+}
+
+#analysis-flow-section calcite-segmented-control,
+#analysis-contributors-section calcite-segmented-control {
+  margin-top: 0.25rem;
+  margin-bottom: 0.55rem;
+}
+
+#analysis-flow-section calcite-input-number,
+#analysis-contributors-section calcite-input-number,
+#analysis-swipe-section calcite-select {
+  margin-top: 0.25rem;
+}
+
+#analysis-swipe-section calcite-button {
+  margin-top: 0.5rem;
+}
+
+#close-swipe-btn {
+  margin-top: 0.35rem;
+}
+
+.highlight-flow-controls {
+  margin-top: 1em;
+}
+
+calcite-shell-panel[slot="panel-start"] {
+  inset-block-start: var(--calcite-shell-header-height);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  border-radius: 6px;
+  max-height: calc(100vh - var(--calcite-shell-header-height) - 1rem);
+}
+
+#shell-panel-end {
+  inline-size: var(--analysis-panel-width, 24.5rem) !important;
+  min-inline-size: var(--analysis-panel-width, 24.5rem) !important;
+  max-inline-size: var(--analysis-panel-width, 24.5rem) !important;
+}
+
+#flow-hover-popup-control {
+  margin-top: 0.5rem;
+}
+
+
+
+
+

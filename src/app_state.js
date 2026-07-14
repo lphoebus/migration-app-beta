@@ -1,0 +1,35 @@
+export const appState = {
+  allRelatedFeatures: [],
+  minValue: 2500,
+  highlightHandle: null,
+  activeWidget: null,
+  actionBarExpanded: false,
+  mainView: null,
+  alaskaView: null,
+  hawaiiView: null,
+  linesLayer: null,
+  pointsLayer: null,
+  flowDirection: "outflow", // or inflow or net
+  selectedStateName: null,
+  selectedLineAttributes: null,
+  selectedStatePair: null,
+  lastPolygonGraphic: null,
+  geoLevel: "state", // or "county"
+  countyMoveStats: null, // add any other state properties you use
+  stateLayerMain: null,
+  countyLayerMain: null,
+  stateLayerAlaska: null,
+  countyLayerAlaska: null,
+  stateLayerHawaii: null,
+  countyLayerHawaii: null,
+  mainLinesLayer: null,
+  mainPointsLayer: null,
+  alaskaLinesLayer: null,
+  alaskaPointsLayer: null,
+  hawaiiLinesLayer: null,
+  hawaiiPointsLayer: null,
+  stateThreshold: 15000,
+  countyThreshold: 100,
+  highlightEnabled: false,
+  lineHoverPopupEnabled: false
+};
