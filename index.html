@@ -50,12 +50,6 @@
         <div id="analysis-content" hidden>
         <calcite-block id="analysis-surface" expanded>
         <div id="analysis-summary-block">
-          <!-- <calcite-chip-group id="analysis-context-chips">
-            <calcite-chip id="chip-geo" scale="s">State</calcite-chip>
-            <calcite-chip id="chip-year" scale="s">2020-2021</calcite-chip>
-            <calcite-chip id="chip-tool" scale="s">Summary</calcite-chip>
-          </calcite-chip-group> -->
-
           <calcite-label>Analysis Year
             <calcite-select id="analysis-year-select">
               <calcite-option value="2021">2020-2021</calcite-option>
@@ -122,12 +116,28 @@
             </calcite-segmented-control>
 
             <calcite-label>Minimum Migrants</calcite-label>
-            <calcite-input-number id="flow-min-input" min="0" value="500"></calcite-input-number>
+            <calcite-slider
+              id="migration-slider"
+              min="100"
+              max="10000"
+              step="100"
+              value="500"
+              label-handles
+              snap
+            ></calcite-slider>
 
             <calcite-label id="flow-hover-popup-control" layout="inline">
               Show line hover popup
               <calcite-checkbox id="flow-hover-popup-toggle" checked></calcite-checkbox>
             </calcite-label>
+
+            <calcite-label id="flow-line-animation-control" layout="inline">
+              Animate flow routes
+              <calcite-checkbox id="flow-line-animation-toggle"></calcite-checkbox>
+            </calcite-label>
+            <calcite-tooltip reference-element="flow-line-animation-toggle" placement="top">
+              Animate the top 15 highest-volume paths to show movement direction.
+            </calcite-tooltip>
 
             <div class="analysis-subheading">Top Flows</div>
             <ul id="analysis-top-flows" class="analysis-list"></ul>
@@ -194,6 +204,18 @@
             <calcite-segmented-control-item value="state" checked>State</calcite-segmented-control-item>
             <calcite-segmented-control-item value="county">County</calcite-segmented-control-item>
           </calcite-segmented-control>
+        </calcite-block>
+      </div>
+
+      <div id="flow-direction-card" hidden>
+        <calcite-block heading="Flow Direction" expanded>
+          <calcite-segmented-control id="flow-direction-aggregation-toggle" scale="s">
+            <calcite-segmented-control-item value="count" checked>Paths</calcite-segmented-control-item>
+            <calcite-segmented-control-item value="migrants">Migrants</calcite-segmented-control-item>
+          </calcite-segmented-control>
+          <div id="flow-direction-chart-summary" class="flow-direction-chart-summary">Select a geography in Flow mode to summarize movement direction.</div>
+          <div id="flow-direction-chart-empty" class="flow-direction-chart-empty">No directional flow lines available for the current selection at this threshold.</div>
+          <svg id="flow-direction-chart-svg" class="flow-direction-chart-svg" viewBox="0 0 220 220" role="img" aria-label="Flow direction radar chart"></svg>
         </calcite-block>
       </div>
 

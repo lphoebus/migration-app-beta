@@ -14,6 +14,8 @@ html, body, calcite-shell{
   position: relative;
   width: 100%;
   height: 100%;
+  --right-stack-gap: 0.65rem;
+  --map-render-controls-height: 12rem;
 }
 
 #mainMap {
@@ -229,6 +231,55 @@ calcite-segmented-control-item:last-child {
   width: 100%;
 }
 
+#flow-direction-card {
+  position: absolute;
+  right: 0.65rem;
+  bottom: calc(var(--right-stack-gap) + var(--map-render-controls-height) + var(--right-stack-gap));
+  z-index: 20;
+  width: 232px;
+}
+
+#flow-direction-card calcite-block {
+  --calcite-color-foreground-1: #ffffff;
+  --calcite-block-padding: 0.55rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+  border-radius: 8px;
+}
+
+#flow-direction-aggregation-toggle {
+  width: 100%;
+  margin-bottom: 0.45rem;
+}
+
+.flow-direction-chart-summary {
+  font-size: 0.74rem;
+  line-height: 1.35;
+  color: var(--calcite-color-text-2);
+}
+
+.flow-direction-chart-empty {
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+  color: var(--calcite-color-text-3);
+}
+
+.flow-direction-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 0.45rem;
+}
+
+.flow-direction-axis-label {
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--calcite-color-text-2);
+}
+
+.flow-direction-chart-svg[hidden] {
+  display: none !important;
+}
+
 #map-render-controls {
   position: absolute;
   right: 0.65rem;
@@ -340,6 +391,7 @@ calcite-segmented-control-item:last-child {
     gap: 0.35rem;
   }
 
+  #flow-direction-card,
   #map-geo-controls,
   #map-render-controls {
     width: 208px;
@@ -360,6 +412,7 @@ calcite-segmented-control-item:last-child {
 }
 
 @media (max-width: 900px) {
+  #flow-direction-card,
   #map-geo-controls,
   #map-render-controls {
     width: 188px;
@@ -441,6 +494,10 @@ calcite-shell-panel[slot="panel-start"] {
 
 #flow-hover-popup-control {
   margin-top: 0.5rem;
+}
+
+#flow-line-animation-control {
+  margin-top: 0.35rem;
 }
 
 

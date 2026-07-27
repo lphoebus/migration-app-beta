@@ -8,15 +8,33 @@ import "@arcgis/map-components/dist/components/arcgis-legend";
 import "@arcgis/map-components/dist/components/arcgis-home";
 import "@arcgis/map-components/dist/components/arcgis-zoom";
 import "@arcgis/map-components/dist/components/arcgis-bookmarks";
-import "@arcgis/map-components/dist/components/arcgis-feature";
-import "@arcgis/map-components/dist/components/arcgis-expand";
 import "@arcgis/map-components/dist/components/arcgis-swipe";
+import esriConfig from "@arcgis/core/config";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import MapView from "@arcgis/core/views/MapView";
 import Extent from "@arcgis/core/geometry/Extent";
 
 import { appState } from "./app_state";
+
+esriConfig.log.interceptors.push((level, module, ...args) => {
+  if (level !== "error") return false;
+  if (!String(module || "").includes("FeatureSourceEventLog")) return false;
+
+  const details = args
+    .map((arg) => {
+      if (typeof arg === "string") return arg;
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    })
+    .join(" ");
+
+  const isTileAbort = details.includes("Failed to load tile") && details.includes("Aborted");
+  return isTileAbort;
+});
 
 let setupPanelController = () => {};
 let updateHighlightFlow = async () => ({
@@ -51,7 +69,7 @@ let lastSelectedObjectId = null; // Track the last selected feature's OBJECTID f
 let selectedYear = "2122"; // default to 2021-2022 for stable data availability
 let selectedPolygonHighlightHandles = [];
 
-const YEAR_LABEL_MAP = {
+const yearLabel = {
   "2021": "2020-2021",
   "2122": "2021-2022",
   "2223": "2022-2023"
@@ -64,12 +82,12 @@ function addYearSelectListener() {
   if (yearSelect) {
     selectedYear = yearSelect.value || "2122";
     if (highlightYearSelect) highlightYearSelect.value = selectedYear;
-    if (yearChip) yearChip.textContent = YEAR_LABEL_MAP[selectedYear] || "2021-2022";
+    if (yearChip) yearChip.textContent = yearLabel[selectedYear] || "2021-2022";
   }
   if (yearSelect && !yearSelect._listenerAdded) {
     yearSelect.addEventListener("calciteSelectChange", (e) => {
       selectedYear = e.target.value;
-      if (yearChip) yearChip.textContent = YEAR_LABEL_MAP[selectedYear] || "2020-2021";
+      if (yearChip) yearChip.textContent = yearLabel[selectedYear] || "2020-2021";
       if (highlightYearSelect) highlightYearSelect.value = selectedYear;
       if (appState.highlightEnabled && lastSelectedStateFips && lastSelectedObjectId) {
         const flowType = document.getElementById("highlight-flow-toggle").value;
@@ -107,6 +125,7 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     migrationModule,
     interactionsModule,
     mappingModule,
+    flowDirectionChartModule,
     swipeModule
   ] = await Promise.all([
     loadUiModule(),
@@ -114,6 +133,7 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     import("./migration"),
     import("./interactions"),
     import("./mapping"),
+    import("./flow_direction_chart_svg.js"),
     import("./swipe")
   ]);
 
@@ -121,15 +141,14 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     setupActionBarToggle,
     showShellAndHideLoader,
     setupSlider,
-    setupClearLinesBtn,
-    setupResetSliderBtn,
     setupAboutDialog
   } = uiModule;
-  const { drawLines } = drawModule;
+  const { drawLines, stopFlowLineAnimation } = drawModule;
   const { handleOutflow, handleInflow } = migrationModule;
   updateHighlightFlow = migrationModule.updateHighlightFlow;
   const { setupFeatureInfoClick, setupLineHoverPopup } = interactionsModule;
   const { setupMigrationMappingUI } = mappingModule;
+  const { createFlowDirectionChart } = flowDirectionChartModule;
   const { setupSwipeCompareComponent } = swipeModule;
 
   const mainView = mainMap.view;
@@ -211,8 +230,24 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
   appState.pointsLayer = new GraphicsLayer({ listMode: "hide" });
   map.addMany([appState.linesLayer, appState.pointsLayer]);
 
+  function syncFlowAndRendererStyling() {
+    const activeTool = document.getElementById("analysis-tool-tabs")?.value || "summary";
+    const isFlowActive = activeTool === "flow" && Boolean(appState.lastPolygonGraphic);
+    const shouldEnhance = isFlowActive && Boolean(appState.rendererModeActive);
+
+    const polygonOpacity = shouldEnhance ? 0.70 : 1;
+    if (stateLayer) stateLayer.opacity = polygonOpacity;
+    if (countyLayer) countyLayer.opacity = polygonOpacity;
+
+    if (appState.linesLayer) {
+      appState.linesLayer.effect = shouldEnhance
+        ? "drop-shadow(0px 1px 2px rgba(15, 23, 42, 0.35))"
+        : null;
+    }
+  }
+
   const migrationToggle = document.getElementById("migration-toggle");
-  const migrationToolsPanel = document.getElementById("migration-tools-panel"); // wrap your migration controls in a div
+  const migrationToolsPanel = document.getElementById("migration-tools-panel");
 
   if (migrationToggle && migrationToolsPanel) {
     migrationToggle.addEventListener("calciteSwitchChange", (event) => {
@@ -222,16 +257,20 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
         if (appState.linesLayer) appState.linesLayer.removeAll();
         if (appState.pointsLayer) appState.pointsLayer.removeAll();
       }
+
+      syncFlowAndRendererStyling();
+
+      syncFlowDirectionChartVisibility();
     });
   }
 
-  // --- Access state/county layers from the web map if needed ---
+  // access state/county layers by title
   stateLayer = map.layers.find(layer => layer.title === "State Migration Data");
   countyLayer = map.layers.find(layer => layer.title === "County Migration Data");
   stateLayer.outFields = ["*"];
   countyLayer.outFields = ["*"];
 
-  // Create hidden comparison layers (not in legend/layer list)
+  // create layers for comparison (hide in legend)
   const stateLayerCompare = new FeatureLayer({
     url: stateLayer.url,
     id: "stateLayerCompare",
@@ -248,7 +287,7 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
   });
   map.addMany([stateLayerCompare, countyLayerCompare]);
 
-  // --- Store references in appState ---
+  // references
   appState.mainView = mainView;
   appState.alaskaView = alaskaView;
   appState.hawaiiView = hawaiiView;
@@ -258,12 +297,14 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
   setupActionBarToggle(mainView);
   showShellAndHideLoader();
   setupSlider(drawLines);
-  setupClearLinesBtn();
-  setupResetSliderBtn();
   setupAboutDialog();
   setupMigrationMappingUI({
     mapId: "mainMap",
     getTargetLayers: () => [stateLayer, countyLayer].filter(Boolean),
+    onRendererModeChange: (active) => {
+      appState.rendererModeActive = Boolean(active);
+      syncFlowAndRendererStyling();
+    }
   });
   setupSwipeCompareComponent({
     mapView: mainView,
@@ -274,14 +315,17 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
   });
 
   const analysisToolTabs = document.getElementById("analysis-tool-tabs");
+  const mapSurface = document.getElementById("map-surface");
+  const mapRenderControls = document.getElementById("map-render-controls");
   const analysisEmptyState = document.getElementById("analysis-empty-state");
   const analysisContent = document.getElementById("analysis-content");
   const analysisSummarySection = document.getElementById("analysis-summary-block");
   const analysisFlowSection = document.getElementById("analysis-flow-section");
   const analysisContributorsSection = document.getElementById("analysis-contributors-section");
   const analysisSwipeSection = document.getElementById("analysis-swipe-section");
-  const flowMinInput = document.getElementById("flow-min-input");
+  const flowMinSlider = document.getElementById("migration-slider");
   const flowHoverPopupToggle = document.getElementById("flow-hover-popup-toggle");
+  const flowLineAnimationToggle = document.getElementById("flow-line-animation-toggle");
   const contributorsThresholdInput = document.getElementById("contributors-threshold");
 
   const analysisGeography = document.getElementById("analysis-geography");
@@ -306,6 +350,42 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
   const contributorsCount = document.getElementById("contributors-count");
   const contributorsRepresented = document.getElementById("contributors-represented");
   const contributorsTopList = document.getElementById("contributors-top-list");
+  const flowDirectionAggregationToggle = document.getElementById("flow-direction-aggregation-toggle");
+  const flowDirectionChart = createFlowDirectionChart();
+
+  const syncRightOverlayOffsets = () => {
+    if (!mapSurface || !mapRenderControls) return;
+    const height = mapRenderControls.offsetHeight || 0;
+    mapSurface.style.setProperty("--map-render-controls-height", `${height}px`);
+  };
+
+  syncRightOverlayOffsets();
+  if (typeof ResizeObserver !== "undefined" && mapRenderControls) {
+    const overlayObserver = new ResizeObserver(() => {
+      syncRightOverlayOffsets();
+    });
+    overlayObserver.observe(mapRenderControls);
+  }
+
+  const isMigrationToolEnabled = () => {
+    const toggle = document.getElementById("migration-toggle");
+    return toggle ? toggle.checked : true;
+  };
+
+  const syncFlowDirectionChartVisibility = () => {
+    const shouldShow = isMigrationToolEnabled() && (analysisToolTabs?.value === "flow");
+    if (!shouldShow) {
+      flowDirectionChart.clear({ hideCard: true });
+      return;
+    }
+
+    flowDirectionChart.setVisible(true);
+    if (!appState.lastPolygonGraphic) {
+      flowDirectionChart.clear({
+        message: "Select a geography in Flow mode to summarize movement direction."
+      });
+    }
+  };
 
   const getDefaultContributorsThreshold = (geoLevel) =>
     geoLevel === "state" ? appState.stateThreshold : appState.countyThreshold;
@@ -318,9 +398,9 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
   const yearSelect = document.getElementById("analysis-year-select");
   const highlightYearSelect = document.getElementById("highlight-year-select");
   if (yearSelect) {
-    selectedYear = yearSelect.value || "2122";
+    selectedYear = yearSelect.value || "2223";
     if (highlightYearSelect) highlightYearSelect.value = selectedYear;
-    if (chipYear) chipYear.textContent = YEAR_LABEL_MAP[selectedYear] || "2021-2022";
+    if (chipYear) chipYear.textContent = yearLabel[selectedYear] || "2022-2023";
   }
 
   const getFieldValue = (attributes, fieldName) => {
@@ -331,7 +411,7 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
   };
 
   const getMetricValue = (attributes, prefix) => {
-    const yearFallbackOrder = [selectedYear, "2122", "2021", "2223"];
+    const yearFallbackOrder = [selectedYear, "2021", "2122", "2223"];
     for (const year of yearFallbackOrder) {
       const value = getFieldValue(attributes, `${prefix}${year}`);
       if (value != null) return value;
@@ -368,7 +448,7 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
           : "Summary";
 
     if (chipGeo) chipGeo.textContent = geoLabel;
-    if (chipYear) chipYear.textContent = YEAR_LABEL_MAP[selectedYear] || "2020-2021";
+    if (chipYear) chipYear.textContent = yearLabel[selectedYear] || "2022-2023";
     if (chipTool) chipTool.textContent = toolLabel;
   };
 
@@ -433,95 +513,193 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     if (analysisChartNetValue) analysisChartNetValue.textContent = formatSigned(net);
   };
 
-  const getFlowYearSuffix = (year = "2021") => {
-    const yearSuffixByYear = {
-      "2021": "2020_2021",
-      "2122": "2021_2022",
-      "2223": "2022_2023"
-    };
-    return yearSuffixByYear[year] || "2021_2022";
+  const normalizeFipsForGeo = (value, geoLevel) => {
+    const text = String(value ?? "").trim();
+    if (!text) return "";
+    return geoLevel === "state" ? text.padStart(2, "0") : text.padStart(5, "0");
   };
 
-  const queryTopPartnersByYear = async ({ geoLevel, selectedFips, direction, year = "2122" }) => {
-    const yearSuffix = getFlowYearSuffix(year);
-    const defaultYearSuffix = "2021_2022";
+  const isSpecialFlowCode = (value, geoLevel) => {
+    const code = String(value ?? "").trim().replace(/^0+/, "");
+    const blockedPrefixes = ["57", "58", "59", "96", "97"];
+    return blockedPrefixes.some((prefix) => code.startsWith(prefix));
+  };
 
-    const configByGeo = {
-      state: {
-        inflow: {
-          url: `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/state_inflow_${yearSuffix}_centroids/FeatureServer`,
-          whereField: "y2_state_fips",
-          nameField: "y1_state_name",
-          partnerField: "y1_state_fips"
-        },
-        outflow: {
-          url: `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/state_outflow_${yearSuffix}_centroids/FeatureServer`,
-          whereField: "y1_state_fips",
-          nameField: "y2_state_name",
-          partnerField: "y2_state_fips"
-        }
-      },
-      county: {
-        inflow: {
-          url: `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/county_inflow_${yearSuffix}_centroids/FeatureServer`,
-          whereField: "y2_county_fips",
-          nameField: "y1_countyname",
-          partnerField: "y1_county_fips"
-        },
-        outflow: {
-          url: `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/county_outflow_${yearSuffix}_centroids/FeatureServer`,
-          whereField: "y1_county_fips",
-          nameField: "y2_countyname",
-          partnerField: "y2_county_fips"
-        }
+  const looksLikeFipsLabel = (value, geoLevel) => {
+    const text = String(value ?? "").trim();
+    if (!text) return false;
+    if (!/^\d+$/.test(text)) return false;
+    return geoLevel === "state" ? text.length <= 2 : text.length <= 5;
+  };
+
+  const getFieldCaseInsensitive = (attributes, fieldName) => {
+    if (!attributes || !fieldName) return undefined;
+    if (fieldName in attributes) return attributes[fieldName];
+    const key = Object.keys(attributes).find((candidate) => candidate.toLowerCase() === fieldName.toLowerCase());
+    return key ? attributes[key] : undefined;
+  };
+
+  const getFirstFieldValue = (attributes, fieldCandidates = []) => {
+    for (const fieldName of fieldCandidates) {
+      const value = getFieldCaseInsensitive(attributes, fieldName);
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        return value;
       }
-    };
+    }
+    return undefined;
+  };
 
-    const config = configByGeo[geoLevel]?.[direction];
-    if (!config) return { topNames: [], nonMigrants: 0 };
+  const getRelatedFieldYearTokens = (year = "") => {
+    return [String(year)];
+  };
 
-    const queryForUrl = async (url) => {
-      const layer = new FeatureLayer({ url });
-      const query = layer.createQuery();
-      query.where = `${config.whereField} = '${selectedFips}'`;
-      query.outFields = [config.nameField, config.partnerField, "n2"];
-      query.returnGeometry = false;
-      query.orderByFields = ["n2 DESC"];
-      query.num = 100;
-      return layer.queryFeatures(query);
-    };
+  const addYearFieldVariants = (fieldNames = [], year = "2223") => {
+    const tokens = getRelatedFieldYearTokens(year);
+    const yearVariants = fieldNames.flatMap((fieldName) => tokens.map((token) => `${fieldName}_${token}`));
+    return [...new Set([...fieldNames, ...yearVariants])];
+  };
 
-    let result;
-    try {
-      result = await queryForUrl(config.url);
-    } catch {
-      const fallbackUrl = config.url.replace(yearSuffix, defaultYearSuffix);
-      result = await queryForUrl(fallbackUrl);
+  const getNonMigrantsValue = (attributes = {}, year = "2223") => {
+    const inCandidates = addYearFieldVariants([
+      "in_nonmigrants_n2",
+      "in_nonmigrants"
+    ], year);
+    const outCandidates = addYearFieldVariants([
+      "out_nonmigrants_n2",
+      "out_nonmigrants"
+    ], year);
+
+    const inValue = Number(getFirstFieldValue(attributes, inCandidates));
+    if (Number.isFinite(inValue) && inValue >= 0) {
+      return inValue;
     }
 
+    const outValue = Number(getFirstFieldValue(attributes, outCandidates));
+    if (Number.isFinite(outValue) && outValue >= 0) {
+      return outValue;
+    }
+
+    return null;
+  };
+
+  const queryTopPartnersByYear = async ({
+    geoLevel,
+    layer,
+    objectId,
+    selectedFips,
+    direction,
+    year = "2223",
+    relationshipId = 0
+  }) => {
+    if (!layer || typeof layer.queryRelatedFeatures !== "function") {
+      return { topNames: [], nonMigrants: 0 };
+    }
+
+    const relatedResults = await layer.queryRelatedFeatures({
+      relationshipId,
+      objectIds: [objectId],
+      outFields: ["*"]
+    });
+
+    const records = relatedResults?.[objectId]?.features || [];
+    if (!records.length) return { topNames: [], nonMigrants: 0 };
+
+    const directionalPartnerFipsCandidates = geoLevel === "state"
+      ? (direction === "inflow"
+        ? ["y1_state_fips", "y1_statefips", "origin_state_fips"]
+        : ["y2_state_fips", "y2_statefips", "destination_state_fips"])
+      : (direction === "inflow"
+        ? ["y1_county_fips", "y1_countyfips", "origin_county_fips"]
+        : ["y2_county_fips", "y2_countyfips", "destination_county_fips"]);
+    const directionalPartnerFipsCandidatesWithYear = addYearFieldVariants(directionalPartnerFipsCandidates, year);
+
+    const partnerFipsCandidates = geoLevel === "state"
+      ? [...addYearFieldVariants(["partner_statefips", "partner_fips", "partnerStateFips"], year), ...directionalPartnerFipsCandidatesWithYear]
+      : [...addYearFieldVariants(["partner_countyfips", "partner_fips", "partnerCountyFips"], year), ...directionalPartnerFipsCandidatesWithYear];
+
+    const partnerNameCandidates = geoLevel === "state"
+      ? (direction === "inflow"
+        ? ["y1_state_name", "partner_state_name", "originName", "NAME", "name"]
+        : ["y2_state_name", "partner_state_name", "destinationName", "NAME", "name"])
+      : (direction === "inflow"
+        ? ["y1_countyname", "y1_county_name", "partner_county_name", "partner_countyname", "originName", "NAME", "name"]
+        : ["y2_countyname", "y2_county_name", "partner_county_name", "partner_countyname", "destinationName", "NAME", "name"]);
+    const partnerNameCandidatesWithYear = addYearFieldVariants(partnerNameCandidates, year);
+
+    const valueCandidates = direction === "inflow"
+      ? addYearFieldVariants(["IN_n2", "in_n2"], year)
+      : addYearFieldVariants(["OUT_n2", "out_n2"], year);
+
     let nonMigrants = 0;
-    const rankedPartners = [];
+    const partnerTotals = new Map();
 
-    result.features.forEach((feature) => {
+    records.forEach((feature) => {
       const attrs = feature.attributes || {};
-      const partnerFips = String(attrs[config.partnerField] ?? "").trim();
-      const partnerName = String(attrs[config.nameField] ?? "").trim();
-      const value = Number(attrs.n2 || 0);
+      const rawPartnerFips = getFirstFieldValue(attrs, partnerFipsCandidates);
+      const partnerFips = normalizeFipsForGeo(rawPartnerFips, geoLevel);
+      const partnerName = String(getFirstFieldValue(attrs, partnerNameCandidatesWithYear) ?? "").trim();
+      const value = Number(getFirstFieldValue(attrs, valueCandidates) ?? 0);
+      if (!Number.isFinite(value) || value <= 0) return;
 
-      if ((partnerFips && partnerFips === selectedFips) || partnerName.toLowerCase().includes("non-migrant")) {
+      if (geoLevel === "county" && !partnerFips) {
         nonMigrants += value;
         return;
       }
 
-      if (partnerName) {
-        rankedPartners.push({ name: partnerName, value });
+      const isSelf = Boolean(partnerFips && partnerFips === selectedFips);
+      const isSpecial = isSpecialFlowCode(partnerFips, geoLevel);
+      const isNonMigrantLabel = partnerName.toLowerCase().includes("non-migrant");
+
+      if (isSelf || isSpecial || isNonMigrantLabel) {
+        nonMigrants += value;
+        return;
       }
+
+      const mapKey = partnerFips || partnerName;
+      if (!mapKey) return;
+
+      const existing = partnerTotals.get(mapKey) || { fips: partnerFips, name: partnerName || "", value: 0 };
+      existing.value += value;
+      if (!existing.name && partnerName) existing.name = partnerName;
+      if (!existing.fips && partnerFips) existing.fips = partnerFips;
+      partnerTotals.set(mapKey, existing);
     });
 
-    const topNames = rankedPartners
+    const unresolvedFips = [...new Set(
+      [...partnerTotals.values()]
+        .filter((item) => item.fips && (!item.name || looksLikeFipsLabel(item.name, geoLevel)))
+        .map((item) => item.fips)
+    )];
+
+    if (unresolvedFips.length) {
+      const fipsField = geoLevel === "state" ? "statefips" : "countyfips";
+      const whereClause = `${fipsField} IN ('${unresolvedFips.join("','")}')`;
+      const nameResult = await layer.queryFeatures({
+        where: whereClause,
+        outFields: [fipsField, "NAME"],
+        returnGeometry: false
+      });
+
+      const namesByFips = {};
+      nameResult.features.forEach((feature) => {
+        const featureFips = normalizeFipsForGeo(feature.attributes?.[fipsField], geoLevel);
+        const featureName = String(feature.attributes?.NAME ?? "").trim();
+        if (!featureFips || !featureName) return;
+        namesByFips[featureFips] = featureName;
+      });
+
+      partnerTotals.forEach((item) => {
+        if ((!item.name || looksLikeFipsLabel(item.name, geoLevel)) && item.fips && namesByFips[item.fips]) {
+          item.name = namesByFips[item.fips];
+        }
+      });
+    }
+
+    const topNames = [...partnerTotals.values()]
       .sort((a, b) => b.value - a.value)
       .slice(0, 3)
-      .map((item) => item.name);
+      .map((item) => item.name || item.fips)
+      .filter(Boolean);
 
     return { topNames, nonMigrants };
   };
@@ -532,6 +710,8 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     const selectedFips = geoLevel === "state"
       ? String(attrs.statefips || "").padStart(2, "0")
       : String(attrs.countyfips || "").padStart(5, "0");
+    const selectedObjectId = attrs.OBJECTID;
+    const selectedLayer = geoLevel === "state" ? stateLayer : countyLayer;
 
     const inflowValue = Number(getMetricValue(attrs, "in_n2_"));
     const outflowValue = Number(getMetricValue(attrs, "out_n2_"));
@@ -546,8 +726,22 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     let topDestinationsResult = { topNames: [], nonMigrants: 0 };
     try {
       [topSourcesResult, topDestinationsResult] = await Promise.all([
-        queryTopPartnersByYear({ geoLevel, selectedFips, direction: "inflow", year: selectedYear }),
-        queryTopPartnersByYear({ geoLevel, selectedFips, direction: "outflow", year: selectedYear })
+        queryTopPartnersByYear({
+          geoLevel,
+          layer: selectedLayer,
+          objectId: selectedObjectId,
+          selectedFips,
+          direction: "inflow",
+          year: selectedYear
+        }),
+        queryTopPartnersByYear({
+          geoLevel,
+          layer: selectedLayer,
+          objectId: selectedObjectId,
+          selectedFips,
+          direction: "outflow",
+          year: selectedYear
+        })
       ]);
     } catch {
       topSourcesResult = { topNames: [], nonMigrants: 0 };
@@ -557,15 +751,20 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     renderRankedList(analysisTopSources, topSourcesResult.topNames || []);
     renderRankedList(analysisTopDestinations, topDestinationsResult.topNames || []);
 
-    const nonMigrants = Number(topSourcesResult.nonMigrants || topDestinationsResult.nonMigrants || 0);
+    const nonMigrantsFieldValue = getNonMigrantsValue(attrs, selectedYear);
+    const nonMigrants = Number.isFinite(nonMigrantsFieldValue)
+      ? nonMigrantsFieldValue
+      : Number(topSourcesResult.nonMigrants || topDestinationsResult.nonMigrants || 0);
     if (analysisNonMigrants) {
       analysisNonMigrants.textContent = `${formatNumber(nonMigrants)} people did not migrate`;
     }
   };
 
   const clearFlowOverlays = () => {
+    stopFlowLineAnimation();
     if (appState.linesLayer) appState.linesLayer.removeAll();
     if (appState.pointsLayer) appState.pointsLayer.removeAll();
+    syncFlowAndRendererStyling();
   };
 
   const clearContributorHighlight = () => {
@@ -579,10 +778,20 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
   };
 
   const runFlowAnalysis = async () => {
-    if (!appState.lastPolygonGraphic) return;
+    syncFlowDirectionChartVisibility();
+    if (!isMigrationToolEnabled()) return;
+
+    if (!appState.lastPolygonGraphic) {
+      flowDirectionChart.clear({
+        message: "Select a geography in Flow mode to summarize movement direction."
+      });
+      syncFlowAndRendererStyling();
+      return;
+    }
+
     const flowDirection = document.getElementById("flow-segmented")?.value || "outflow";
     appState.flowDirection = flowDirection;
-    appState.minValue = Number(flowMinInput?.value || 500);
+    appState.minValue = Number(flowMinSlider?.value || 500);
 
     if (flowDirection === "inflow") {
       await handleInflow(appState.lastPolygonGraphic, mainView, stateLayer, countyLayer, selectedYear);
@@ -605,6 +814,21 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
 
       renderRankedList(analysisTopFlows, topFlows);
     }
+
+    const selectedLabel = appState.geoLevel === "county"
+      ? (appState.selectedCountyName || "Selected county")
+      : (appState.selectedStateName || "Selected state");
+
+    await flowDirectionChart.update({
+      features: appState.allRelatedFeatures || [],
+      flowDirection: appState.flowDirection,
+      minValue: appState.minValue,
+      aggregation: flowDirectionAggregationToggle?.value === "migrants" ? "migrants" : "count",
+      selectedLabel,
+      visible: true
+    });
+
+    syncFlowAndRendererStyling();
   };
 
   const runContributorsAnalysis = async () => {
@@ -653,6 +877,9 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     if (value !== "contributors") {
       clearContributorHighlight();
     }
+
+    syncFlowDirectionChartVisibility();
+    syncFlowAndRendererStyling();
   };
 
   const handleGeographySelection = async (polygonGraphic) => {
@@ -701,6 +928,8 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     setAnalysisSelectionState(false);
 
     if (featureInfoDiv) featureInfoDiv.graphic = null;
+
+    syncFlowDirectionChartVisibility();
   };
 
   if (analysisToolTabs) {
@@ -714,7 +943,19 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     setActiveToolSection(analysisToolTabs.value || "summary");
   }
 
-  flowMinInput?.addEventListener("calciteInputNumberChange", async () => {
+  flowMinSlider?.addEventListener("calciteSliderInput", async () => {
+    if (analysisToolTabs?.value === "flow") {
+      await runFlowAnalysis();
+    }
+  });
+
+  flowMinSlider?.addEventListener("calciteSliderChange", async () => {
+    if (analysisToolTabs?.value === "flow") {
+      await runFlowAnalysis();
+    }
+  });
+
+  flowDirectionAggregationToggle?.addEventListener("calciteSegmentedControlChange", async () => {
     if (analysisToolTabs?.value === "flow") {
       await runFlowAnalysis();
     }
@@ -784,9 +1025,24 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     });
   }
 
+  if (flowLineAnimationToggle) {
+    appState.animateFlowLines = Boolean(appState.animateFlowLines);
+    flowLineAnimationToggle.checked = appState.animateFlowLines;
+    flowLineAnimationToggle.addEventListener("calciteCheckboxChange", async (event) => {
+      appState.animateFlowLines = event.target.checked;
+      if (!appState.animateFlowLines) {
+        stopFlowLineAnimation();
+      }
+      if (analysisToolTabs?.value === "flow" && appState.lastPolygonGraphic) {
+        await runFlowAnalysis();
+      }
+    });
+  }
+
   const geoLevelSegmented = document.getElementById("geo-level-segmented");
   if (geoLevelSegmented) {
     geoLevelSegmented.addEventListener("calciteSegmentedControlChange", (event) => {
+      stopFlowLineAnimation();
       if (appState.linesLayer) appState.linesLayer.removeAll();
       if (appState.pointsLayer) appState.pointsLayer.removeAll();
 
@@ -806,6 +1062,7 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
       setAnalysisSelectionState(false);
       clearContributorHighlight();
       clearSelectedPolygonHighlights();
+      syncFlowDirectionChartVisibility();
 
       if (appState.highlightHandle) {
         appState.highlightHandle.remove();
@@ -821,7 +1078,7 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
       const slider = document.getElementById("migration-slider");
       if (slider) {
         const defaultStateValue = 2500;
-        const defaultCountyValue = 100;
+        const defaultCountyValue = 200;
         const newValue = appState.geoLevel === "state" ? defaultStateValue : defaultCountyValue;
         slider.value = newValue;
         appState.minValue = newValue;
@@ -829,6 +1086,8 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
       }
     });
   }
+
+  syncFlowDirectionChartVisibility();
 
   updateGeographyTextLabels(appState.geoLevel || "state");
   syncAnalysisContextChips();

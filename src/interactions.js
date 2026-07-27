@@ -1,6 +1,6 @@
 import { appState } from "./app_state";
 import { highlightFeature } from "./draw";
-import { handleOutflow, handleInflow, handleNetMigration } from "./migration";
+import { handleOutflow, handleInflow } from "./migration";
 
 
 export function setupFeatureInfoClick(view, featureInfoDiv, statePolygonLayer, countyPolygonLayer, options = {}) {
@@ -83,15 +83,15 @@ export function setupFeatureInfoClick(view, featureInfoDiv, statePolygonLayer, c
                     return;
                 }
 
-                if (appState.flowDirection === "net") {
-                    handleNetMigration(polygonGraphic, view, statePolygonLayer, countyPolygonLayer);
-                } else if (appState.flowDirection === "outflow") {
+                if (appState.flowDirection === "outflow") {
                     handleOutflow(polygonGraphic, view, statePolygonLayer, countyPolygonLayer);
                 } else if (appState.flowDirection === "inflow") {
                     handleInflow(polygonGraphic, view, statePolygonLayer, countyPolygonLayer);
+                } else {
+                    handleOutflow(polygonGraphic, view, statePolygonLayer, countyPolygonLayer);
                 }
             }
-                        // If no feature was clicked, clear highlight and info
+            // If no feature was clicked, clear highlight and info
             if (!pointGraphic && !lineGraphic && !polygonGraphic) {
                 if (appState.highlightHandle) {
                     appState.highlightHandle.remove();
@@ -134,18 +134,8 @@ export function setupLineHoverPopup(view) {
                 let popupTitle = "";
                 let popupContent = "";
 
-                // --- NET MIGRATION POPUP ---
-                if (appState.flowDirection === "net") {
-                    popupTitle = attrs.netDirection === "inflow"
-                        ? `Net gain to ${attrs.destinationName}`
-                        : `Net loss from ${attrs.destinationName}`;
-                    popupContent = `<b>${attrs.nValue.toLocaleString()}</b> more people 
-                        ${attrs.netDirection === "inflow" ? "moved into" : "left"} <b>${attrs.destinationName}</b> 
-                        than ${attrs.netDirection === "inflow" ? "left" : "moved in"}.`;//<br><br>
-                        // Adjusted Gross Income: <b>$${attrs.AGI ? attrs.AGI.toLocaleString() : "N/A"}</b>.`;
-                }
                 // --- COUNTY LEVEL POPUP ---
-                else if (appState.geoLevel === "county") {
+                if (appState.geoLevel === "county") {
                     let originCounty, originAbbr, destCounty, destAbbr;
                     if (appState.flowDirection === "outflow") {
                         originCounty = appState.selectedCountyName || "Unknown County";

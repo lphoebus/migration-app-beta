@@ -1,375 +1,508 @@
-import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
-import Graphic from "@arcgis/core/Graphic";
-
 import { appState } from "./app_state";
-import { drawLines, updateMigrationSummaryPanel } from "./draw";
+import { drawLines } from "./draw";
 
 function isMigrationEnabled() {
   const toggle = document.getElementById("migration-toggle");
   return toggle ? toggle.checked : true;
 }
 
-function getFlowYearSuffix(year = "2021") {
-  const yearSuffixByYear = {
-    "2021": "2020_2021",
-    "2122": "2021_2022",
-    "2223": "2022_2023"
-  };
-  return yearSuffixByYear[year] || "2021_2022";
+function getRelatedFieldYearTokens(year = "2223") {
+  return [String(year)];
 }
 
-async function queryFlowLayerWithFallback(url, whereField, whereValue, outFields = ["*"]) {
-  const defaultYearSuffix = "2021_2022";
+function addYearFieldVariants(fieldNames = [], year = "2223") {
+  const tokens = getRelatedFieldYearTokens(year);
+  const yearVariants = fieldNames.flatMap((fieldName) => tokens.map((token) => `${fieldName}_${token}`));
+  return [...new Set([...fieldNames, ...yearVariants])];
+}
 
-  const executeQuery = async (layerUrl) => {
-    const flowLayer = new FeatureLayer({ url: layerUrl });
-    const flowQuery = flowLayer.createQuery();
-    flowQuery.where = `${whereField} = '${whereValue}'`;
-    flowQuery.outFields = outFields;
-    flowQuery.returnGeometry = false;
-    return flowLayer.queryFeatures(flowQuery);
-  };
+const normalizeFipsForGeo = (value, geoLevel) => {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  return geoLevel === "state" ? text.padStart(2, "0") : text.padStart(5, "0");
+};
+
+function shouldUseRelatedTableFlowLines(geoLevel) {
+  const mode = appState.useRelatedTableFlowLines;
+  if (typeof mode === "boolean") return mode;
+  if (mode && typeof mode === "object" && geoLevel in mode) {
+    return Boolean(mode[geoLevel]);
+  }
+  return false;
+}
+
+function getCaseInsensitiveValue(attributes, fieldName) {
+  if (!attributes || !fieldName) return undefined;
+  if (fieldName in attributes) return attributes[fieldName];
+  const key = Object.keys(attributes).find((candidate) => candidate.toLowerCase() === fieldName.toLowerCase());
+  return key ? attributes[key] : undefined;
+}
+
+function getFirstValue(attributes, fieldNames = []) {
+  for (const fieldName of fieldNames) {
+    const value = getCaseInsensitiveValue(attributes, fieldName);
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function isSpecialStateCode(value) {
+  const code = String(value ?? "").trim().replace(/^0+/, "");
+  const blockedPrefixes = ["57", "58", "59", "96", "97", "98"];
+  return blockedPrefixes.some((prefix) => code.startsWith(prefix));
+}
+
+function isSpecialCountyCode(value) {
+  const code = String(value ?? "").trim().replace(/^0+/, "");
+  const blockedPrefixes = ["57", "58", "59", "96", "97", "98"];
+  return blockedPrefixes.some((prefix) => code.startsWith(prefix));
+}
+
+async function loadCentroidsFromJsonIntoCache(geoLevel, requestedFips = []) {
+  if (!appState.useJsonCentroidLookup) return;
+
+  const cacheKey = geoLevel === "state" ? "stateCentroidCache" : "countyCentroidCache";
+  if (!appState[cacheKey]) appState[cacheKey] = {};
+  const cache = appState[cacheKey];
+
+  const url = appState.centroidJsonUrls?.[geoLevel];
+  if (!url) return;
+
+  // Keep parsed JSON in memory so we can copy requested keys on every call.
+  if (!appState._jsonCentroidDict) appState._jsonCentroidDict = { state: null, county: null };
+
+  let asDict = appState._jsonCentroidDict[geoLevel];
+  if (!asDict) {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) {
+      console.warn(`Centroid JSON load failed for ${geoLevel}: ${res.status} (${url})`);
+      return;
+    }
+
+    const json = await res.json();
+    const centroids = json?.centroids || {};
+    asDict = Array.isArray(centroids)
+      ? Object.fromEntries(
+          centroids
+            .map((r) => {
+              const fips = normalizeFipsForGeo(r.fips ?? r.FIPS ?? r.id, geoLevel);
+              if (!fips || r.x == null || r.y == null) return null;
+              return [fips, { x: Number(r.x), y: Number(r.y), name: r.name ?? "", stateAbbr: r.stateAbbr ?? "" }];
+            })
+            .filter(Boolean)
+        )
+      : centroids;
+
+    appState._jsonCentroidDict[geoLevel] = asDict;
+  }
+
+  const keys = requestedFips.length
+    ? requestedFips.map((f) => normalizeFipsForGeo(f, geoLevel)).filter(Boolean)
+    : Object.keys(asDict);
+
+  keys.forEach((fips) => {
+    if (cache[fips]) return;
+    const row = asDict[fips];
+    if (!row) return;
+    const x = Number(row.x);
+    const y = Number(row.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+    cache[fips] = {
+      x,
+      y,
+      name: String(row.name ?? "").trim(),
+      stateAbbr: String(row.stateAbbr ?? "").trim()
+    };
+  });
+}
+
+async function ensureCentroidsForFips(geoLevel, requestedFips = [], statePolygonLayer, countyPolygonLayer) {
+  const cacheKey = geoLevel === "state" ? "stateCentroidCache" : "countyCentroidCache";
+  if (!appState[cacheKey]) appState[cacheKey] = {};
+  const existingCache = appState[cacheKey];
+
+  const normalizedRequestedFips = [...new Set(
+    requestedFips
+      .map((value) => normalizeFipsForGeo(value, geoLevel))
+      .filter(Boolean)
+  )];
 
   try {
-    return await executeQuery(url);
-  } catch {
-    const fallbackUrl = url.replace(/\d{4}_\d{4}/, defaultYearSuffix);
-    return executeQuery(fallbackUrl);
+    await loadCentroidsFromJsonIntoCache(geoLevel, normalizedRequestedFips);
+  } catch (e) {
+    console.warn(`JSON centroid hydrate failed for ${geoLevel}.`, e);
   }
+
+  const missingFips = normalizedRequestedFips.filter((fips) => !existingCache[fips]);
+  if (missingFips.length) {
+    console.warn(`Centroid JSON is missing ${missingFips.length} ${geoLevel} FIPS values. Sample: ${missingFips.slice(0, 10).join(", ")}`);
+  }
+
+  return existingCache;
 }
 
-export async function handleOutflow(polygonGraphic, view, statePolygonLayer, countyPolygonLayer, year = "2021") {
-  if (!isMigrationEnabled()) return;
-
-  if (appState.geoLevel === "county" && polygonGraphic && polygonGraphic.geometry && view) {
-    await view.goTo({
-      target: polygonGraphic.geometry,
-      zoom: 6
-    });
-  }
-
-  const objectId = polygonGraphic.attributes.OBJECTID;
-  const layer = polygonGraphic.layer;
-
-  const result = await layer.queryFeatures({
+async function queryRelatedFlowRecords(layer, objectId, relationshipId = 0) {
+  const relatedResults = await layer.queryRelatedFeatures({
+    relationshipId,
     objectIds: [objectId],
     outFields: ["*"]
   });
-  if (result.features.length > 0) {
-    const attrs = result.features[0].attributes;
-    let selectedName, queryLayerUrl, whereField, nField, originField, destField, agiField, whereValue;
+  return relatedResults[objectId]?.features || [];
+}
 
-    const yearSuffix = getFlowYearSuffix(year);
+async function tryBuildStateFlowFromRelatedTable(layer, objectId, attrs, flowDirection, year, statePolygonLayer, countyPolygonLayer) {
+  if (typeof layer?.queryRelatedFeatures !== "function") {
+    console.warn("State layer does not support queryRelatedFeatures; rendering no state lines.");
+    return [];
+  }
 
-    if (appState.geoLevel === "state") {
-      const stateFips = String(attrs.statefips || "").padStart(2, "0");
-      selectedName = attrs.NAME;
-      agiField = "AGI";
-      queryLayerUrl = `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/state_outflow_${yearSuffix}_centroids/FeatureServer`;
-      whereField = "y1_state_fips";
-      nField = "n2";
-      originField = "y1_state_name";
-      destField = "y2_state_name";
-      whereValue = stateFips;
-    } else {
-      const countyFips = String(attrs.countyfips || "").padStart(5, "0");
-      selectedName = attrs.NAME;
-      agiField = "agi";
-      queryLayerUrl = `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/county_outflow_${yearSuffix}_centroids/FeatureServer`;
-      whereField = "y1_county_fips";
-      nField = "n2";
-      originField = "y1_countyname";
-      destField = "y2_countyname";
-      whereValue = countyFips;
+  try {
+    const relatedRecords = await queryRelatedFlowRecords(layer, objectId);
+    if (!relatedRecords.length) {
+      console.warn("No related state flow records returned; rendering no state lines.");
+      return [];
     }
 
-    const flowResult = await queryFlowLayerWithFallback(queryLayerUrl, whereField, whereValue, ["*"]);
+    const selectedStateFips = normalizeFipsForGeo(attrs.statefips, "state");
+    const partnerFips = relatedRecords
+      .map((record) => getStatePartnerFips(record.attributes || {}))
+      .filter((fips) => fips && fips !== selectedStateFips && !isSpecialStateCode(fips));
+    const centroidCache = await ensureCentroidsForFips(
+      "state",
+      [selectedStateFips, ...partnerFips],
+      statePolygonLayer,
+      countyPolygonLayer
+    );
+    const flowFeatures = buildStateFlowFeaturesFromRelatedRecords(
+      relatedRecords,
+      attrs,
+      flowDirection,
+      year,
+      centroidCache
+    );
 
-    if (appState.geoLevel === "county") {
-      const originFipsList = flowResult.features.map(f => f.attributes["y1_county_fips"].padStart(5, "0"));
-      const uniqueOriginFips = [...new Set(originFipsList)];
-      const whereClause = `countyfips IN ('${uniqueOriginFips.join("','")}')`;
-
-      // FIXED: Use countyPolygonLayer here
-      const countyFeatures = await countyPolygonLayer.queryFeatures({
-        where: whereClause,
-        outFields: ["countyfips", "State", "NAME"],
-        returnGeometry: false
-      });
-
-      const fipsToCountyInfo = {};
-      countyFeatures.features.forEach(f => {
-        fipsToCountyInfo[f.attributes.countyfips] = {
-          abbr: f.attributes.State,
-          name: f.attributes.NAME
-        };
-      });
-
-      flowResult.features.forEach(f => {
-        const originFips = f.attributes["y1_county_fips"].padStart(5, "0");
-        const originInfo = fipsToCountyInfo[originFips] || {};
-        f.attributes.originName = originInfo.name || f.attributes["y1_countyname"] || originFips;
-        f.attributes.originStateAbbr = originInfo.abbr || f.attributes["y1_state"] || "";
-        f.attributes.destinationName = f.attributes["y2_countyname"];
-        f.attributes.destinationStateAbbr = f.attributes["y2_state"] || "";
-        f.attributes.nValue = f.attributes[nField];
-        f.attributes.AGI = f.attributes[agiField];
-      });
-    } else {
-      flowResult.features.forEach(f => {
-        f.attributes.originName = f.attributes[originField];
-        f.attributes.destinationName = f.attributes[destField];
-        f.attributes.nValue = f.attributes[nField];
-        f.attributes.AGI = f.attributes[agiField];
-      });
+    if (!flowFeatures.length) {
+      console.warn("Related state flow records could not be normalized into draw-ready features; rendering no state lines.");
+      return [];
     }
 
-    appState.allRelatedFeatures = flowResult.features;
-    appState.selectedStateName = selectedName;
-    appState.selectedCountyName = selectedName;
-    appState.selectedCountyAbbr = attrs.State;
-    drawLines(appState.allRelatedFeatures, appState.minValue, selectedName, attrs.State);
-    updateMigrationSummaryPanel();
+    return flowFeatures;
+  } catch (error) {
+    console.error(`State ${flowDirection} related-table flow failed; rendering no state lines.`, error);
+    return [];
   }
 }
 
-export async function handleInflow(polygonGraphic, view, statePolygonLayer, countyPolygonLayer, year = "2021") {
-  if (!isMigrationEnabled()) return;
-
-  if (appState.geoLevel === "county" && polygonGraphic && polygonGraphic.geometry && view) {
-    await view.goTo({
-      target: polygonGraphic.geometry,
-      zoom: 6
-    });
+async function tryBuildCountyFlowFromRelatedTable(layer, objectId, attrs, flowDirection, year, statePolygonLayer, countyPolygonLayer) {
+  if (typeof layer?.queryRelatedFeatures !== "function") {
+    console.warn("County layer does not support queryRelatedFeatures; rendering no county lines.");
+    return [];
   }
 
-  const objectId = polygonGraphic.attributes.OBJECTID;
-  const layer = polygonGraphic.layer;
-
-  const result = await layer.queryFeatures({
-    objectIds: [objectId],
-    outFields: ["*"]
-  });
-  if (result.features.length > 0) {
-    const attrs = result.features[0].attributes;
-    let selectedName, queryLayerUrl, whereField, nField, originField, destField, agiField, whereValue;
-
-    const yearSuffix = getFlowYearSuffix(year);
-
-    if (appState.geoLevel === "state") {
-      const stateFips = attrs.statefips.padStart(2, "0");
-      selectedName = attrs.NAME;
-      agiField = "AGI";
-      queryLayerUrl = `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/state_inflow_${yearSuffix}_centroids/FeatureServer`;
-      whereField = "y2_state_fips";
-      nField = "n2";
-      originField = "y1_state_name";
-      destField = "y2_state_name";
-      whereValue = stateFips;
-    } else {
-      const countyFips = attrs.countyfips.padStart(5, "0");
-      selectedName = attrs.NAME;
-      agiField = "agi";
-      queryLayerUrl = `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/county_inflow_${yearSuffix}_centroids/FeatureServer`;
-      whereField = "y2_county_fips";
-      nField = "n2";
-      originField = "y1_countyname";
-      destField = "y2_countyname";
-      whereValue = countyFips;
+  try {
+    const relatedRecords = await queryRelatedFlowRecords(layer, objectId);
+    if (!relatedRecords.length) {
+      console.warn("No related county flow records returned; rendering no county lines.");
+      return [];
     }
 
-    const flowResult = await queryFlowLayerWithFallback(queryLayerUrl, whereField, whereValue, ["*"]);
+    const selectedCountyFips = normalizeFipsForGeo(attrs.countyfips, "county");
+    const partnerFips = relatedRecords
+      .map((record) => getCountyPartnerFips(record.attributes || {}, flowDirection, year))
+      .filter((fips) => fips && fips !== selectedCountyFips && !isSpecialCountyCode(fips));
+    const centroidCache = await ensureCentroidsForFips(
+      "county",
+      [selectedCountyFips, ...partnerFips],
+      statePolygonLayer,
+      countyPolygonLayer
+    );
+    const flowFeatures = buildCountyFlowFeaturesFromRelatedRecords(
+      relatedRecords,
+      attrs,
+      flowDirection,
+      year,
+      centroidCache
+    );
 
-    if (appState.geoLevel === "county") {
-      const originFipsList = flowResult.features.map(f => f.attributes["y1_county_fips"].padStart(5, "0"));
-      const uniqueOriginFips = [...new Set(originFipsList)];
-      const whereClause = `countyfips IN ('${uniqueOriginFips.join("','")}')`;
-
-      const countyFeatures = await countyPolygonLayer.queryFeatures({
-        where: whereClause,
-        outFields: ["countyfips", "State", "NAME"],
-        returnGeometry: false
-      });
-
-      const fipsToCountyInfo = {};
-      countyFeatures.features.forEach(f => {
-        fipsToCountyInfo[f.attributes.countyfips] = {
-          abbr: f.attributes.State,
-          name: f.attributes.NAME
-        };
-      });
-
-      flowResult.features.forEach(f => {
-        const originFips = f.attributes["y1_county_fips"].padStart(5, "0");
-        const originInfo = fipsToCountyInfo[originFips] || {};
-        f.attributes.originName = originInfo.name || f.attributes["y1_countyname"] || originFips;
-        f.attributes.originStateAbbr = originInfo.abbr || f.attributes["y1_state"] || "";
-        f.attributes.destinationName = f.attributes["y2_countyname"];
-        f.attributes.destinationStateAbbr = f.attributes["y2_state"] || "";
-        f.attributes.nValue = f.attributes[nField];
-        f.attributes.AGI = f.attributes[agiField];
-      });
-    } else {
-      flowResult.features.forEach(f => {
-        f.attributes.originName = f.attributes[originField];
-        f.attributes.destinationName = f.attributes[destField];
-        f.attributes.nValue = f.attributes[nField];
-        f.attributes.AGI = f.attributes[agiField];
-      });
+    if (!flowFeatures.length) {
+      console.warn("Related county flow records could not be normalized into draw-ready features for the selected year; rendering no county lines.");
+      return [];
     }
 
-    appState.allRelatedFeatures = flowResult.features;
-    appState.selectedStateName = selectedName;
-    appState.selectedCountyName = selectedName;
-    appState.selectedCountyAbbr = attrs.State;
-    drawLines(appState.allRelatedFeatures, appState.minValue, selectedName, attrs.State);
-    updateMigrationSummaryPanel();
+    return flowFeatures;
+  } catch (error) {
+    console.error(`County ${flowDirection} related-table flow failed; rendering no county lines.`, error);
+    return [];
   }
 }
 
-export async function handleNetMigration(polygonGraphic, view, statePolygonLayer, countyPolygonLayer, year = "2021") {
-  if (!isMigrationEnabled()) return;
+function getStateFlowValue(attributes, flowDirection, year) {
+  const baseCandidates = flowDirection === "inflow"
+    ? ["IN_n2", "in_n2"]
+    : ["OUT_n2", "out_n2"];
+  const candidates = addYearFieldVariants(baseCandidates, year);
+  const value = Number(getFirstValue(attributes, candidates) ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
 
-  if (appState.geoLevel === "county" && polygonGraphic && polygonGraphic.geometry && view) {
-    await view.goTo({
-      target: polygonGraphic.geometry,
-      zoom: 7
-    });
-  }
+function getStateFlowAgi(attributes, flowDirection, year) {
+  const baseCandidates = flowDirection === "inflow"
+    ? ["IN_AGI", "in_agi", "AGI", "agi"]
+    : ["OUT_AGI", "out_agi", "AGI", "agi"];
+  const candidates = addYearFieldVariants(baseCandidates, year);
+  const value = Number(getFirstValue(attributes, candidates) ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
 
-  const attrs = polygonGraphic.attributes;
-  let inflowUrl, outflowUrl, inflowWhereField, outflowWhereField, whereValue, originField, destField, agiField, nField;
+function getStatePartnerFips(attributes) {
+  return normalizeFipsForGeo(
+    getFirstValue(attributes, ["partner_statefips", "partner_fips", "partnerStateFips"]),
+    "state"
+  );
+}
 
-  const yearSuffix = getFlowYearSuffix(year);
+function getStatePartnerName(attributes) {
+  return String(
+    getFirstValue(attributes, [
+      "partner_state_name",
+      "destinationName",
+      "originName",
+      "NAME",
+      "name"
+    ]) ?? ""
+  ).trim();
+}
 
-  if (appState.geoLevel === "state") {
-    const stateFips = attrs.statefips.padStart(2, "0");
-    inflowUrl = `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/state_inflow_${yearSuffix}_centroids/FeatureServer`;
-    outflowUrl = `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/state_outflow_${yearSuffix}_centroids/FeatureServer`;
-    inflowWhereField = "y2_state_fips";
-    outflowWhereField = "y1_state_fips";
-    whereValue = stateFips;
-    originField = "y1_state_name";
-    destField = "y2_state_name";
-    agiField = "AGI";
-    nField = "n2";
-  } else {
-    const countyFips = attrs.countyfips.padStart(5, "0");
-    inflowUrl = `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/county_inflow_${yearSuffix}_centroids/FeatureServer`;
-    outflowUrl = `https://services.arcgis.com/jIL9msH9OI208GCb/arcgis/rest/services/county_outflow_${yearSuffix}_centroids/FeatureServer`;
-    inflowWhereField = "y2_county_fips";
-    outflowWhereField = "y1_county_fips";
-    whereValue = countyFips;
-    originField = "y1_countyname";
-    destField = "y2_countyname";
-    agiField = "agi";
-    nField = "n2";
-  }
+function getCountyPartnerFips(attributes, flowDirection, year) {
+  const partnerCandidates = addYearFieldVariants([
+    "partner_countyfips",
+    "partner_fips",
+    "partnerCountyFips"
+  ], year);
 
-  const [inflowResult, outflowResult] = await Promise.all([
-    queryFlowLayerWithFallback(inflowUrl, inflowWhereField, whereValue, ["*"]),
-    queryFlowLayerWithFallback(outflowUrl, outflowWhereField, whereValue, ["*"])
-  ]);
+  return normalizeFipsForGeo(
+    getFirstValue(attributes, partnerCandidates),
+    "county"
+  );
+}
 
-  // Build maps for inflow and outflow
-  const inflowMap = {};
-  inflowResult.features.forEach(f => {
-    const key = appState.geoLevel === "state"
-      ? f.attributes["y1_state_fips"] + "_" + f.attributes["y2_state_fips"]
-      : f.attributes["y1_county_fips"] + "_" + f.attributes["y2_county_fips"];
-    inflowMap[key] = f;
-  });
+function getCountyPartnerName(attributes, flowDirection, year) {
+  const directionalCandidates = flowDirection === "inflow"
+    ? ["y1_countyname", "y1_county_name", "originName"]
+    : ["y2_countyname", "y2_county_name", "destinationName"];
 
-  const outflowMap = {};
-  outflowResult.features.forEach(f => {
-    const key = appState.geoLevel === "state"
-      ? f.attributes["y1_state_fips"] + "_" + f.attributes["y2_state_fips"]
-      : f.attributes["y1_county_fips"] + "_" + f.attributes["y2_county_fips"];
-    outflowMap[key] = f;
-  });
+  const partnerCandidates = addYearFieldVariants([
+    "partner_county_name",
+    "partner_countyname"
+  ], year);
+  const directionalCandidatesWithYear = addYearFieldVariants(directionalCandidates, year);
 
-  // Calculate net migration for each pair
-  const netFeatures = [];
-  const allKeys = new Set([...Object.keys(inflowMap), ...Object.keys(outflowMap)]);
-  allKeys.forEach(key => {
-    const inflow = inflowMap[key]?.attributes?.n2 || 0;
-    const outflow = outflowMap[key]?.attributes?.n2 || 0;
-    const net = inflow - outflow;
-    if (Math.abs(net) < appState.minValue) return;
+  return String(
+    getFirstValue(attributes, [
+      ...partnerCandidates,
+      ...directionalCandidatesWithYear,
+      "NAME",
+      "name"
+    ]) ?? ""
+  ).trim();
+}
 
-    // Use inflow feature as base, or outflow if inflow missing
-    const baseFeature = inflowMap[key] || outflowMap[key];
-    const featAttrs = { ...baseFeature.attributes };
-    featAttrs.nValue = Math.abs(net);
-    featAttrs.netDirection = net > 0 ? "inflow" : "outflow";
-    featAttrs.originName = featAttrs[originField];
-    featAttrs.destinationName = featAttrs[destField];
-    featAttrs.AGI = featAttrs[agiField];
-    netFeatures.push({ attributes: featAttrs, net });
-  });
+function getCountyPartnerStateAbbr(attributes, flowDirection, year) {
+  const directionalCandidates = flowDirection === "inflow"
+    ? ["y1_state", "y1_state_abbr", "origin_state", "origin_state_abbr"]
+    : ["y2_state", "y2_state_abbr", "destination_state", "destination_state_abbr"];
 
-  appState.allRelatedFeatures = netFeatures;
-  appState.selectedStateName = attrs.STATE_NAME;
-  appState.selectedCountyName = attrs.NAME;
-  appState.selectedCountyAbbr = attrs.STATE_ABBR;
+  const partnerCandidates = addYearFieldVariants([
+    "partner_state",
+    "partner_state_abbr"
+  ], year);
+  const directionalCandidatesWithYear = addYearFieldVariants(directionalCandidates, year);
 
-  // --- Draw net migration lines with direction and color ---
-  appState.linesLayer.removeAll();
-  appState.pointsLayer.removeAll();
+  return String(
+    getFirstValue(attributes, [
+      ...partnerCandidates,
+      ...directionalCandidatesWithYear,
+      "State",
+      "state"
+    ]) ?? ""
+  ).trim();
+}
 
-  netFeatures.forEach(feature => {
-    const attrs = feature.attributes;
-    const n = attrs.nValue;
-    if (n <= 0) return;
+function buildStateFlowFeaturesFromRelatedRecords(relatedRecords, selectedAttrs, flowDirection, year, centroidCache) {
+  const selectedStateFips = normalizeFipsForGeo(selectedAttrs.statefips, "state");
+  const selectedStateName = String(getFirstValue(selectedAttrs, ["NAME", "name"]) ?? "Selected state");
 
-    let originX = attrs.Origin_X;
-    let originY = attrs.Origin_Y;
-    let destinationX = attrs.Destination_X;
-    let destinationY = attrs.Destination_Y;
-
-    // Reverse direction for net inflow
-    if (attrs.netDirection === "inflow") {
-      [originX, originY, destinationX, destinationY] = [destinationX, destinationY, originX, originY];
+  return relatedRecords.flatMap((record) => {
+    const attrs = record.attributes || {};
+    const partnerFips = getStatePartnerFips(attrs);
+    if (!partnerFips || isSpecialStateCode(partnerFips)) {
+      return [];
     }
 
-    const line = {
-      type: "polyline",
-      paths: [
-        [originX, originY],
-        [destinationX, destinationY]
-      ],
-      spatialReference: { wkid: 3857 }
-    };
+    const nValue = getStateFlowValue(attrs, flowDirection, year);
+    if (!Number.isFinite(nValue) || nValue <= 0) {
+      return [];
+    }
 
-    // Green for net inflow, blue for net outflow
-    const color = attrs.netDirection === "inflow"
-      ? [25, 130, 67, 255]   // green
-      : [25, 72, 130, 255];  // blue
+    const originFips = flowDirection === "outflow" ? selectedStateFips : partnerFips;
+    const destinationFips = flowDirection === "outflow" ? partnerFips : selectedStateFips;
+    const originPt = centroidCache[originFips];
+    const destinationPt = centroidCache[destinationFips];
+    if (!originPt || !destinationPt) {
+      return [];
+    }
 
-    const width = Math.min(8, Math.max(0.5, Math.log10(n) - 2));
-    const arrowSymbol = {
-      type: "simple-line",
-      color: color,
-      width: width,
-      style: "solid"
-    };
+    const partnerName = getStatePartnerName(attrs) || centroidCache[partnerFips]?.name || partnerFips;
+    const originName = flowDirection === "outflow" ? selectedStateName : partnerName;
+    const destinationName = flowDirection === "outflow" ? partnerName : selectedStateName;
 
-    appState.linesLayer.add(new Graphic({
-      geometry: line,
-      symbol: arrowSymbol,
-      attributes: attrs,
-      popupTemplate: {
-        title: attrs.netDirection === "inflow"
-          ? `Net gain to ${attrs.destinationName}`
-          : `Net loss from ${attrs.destinationName}`,
-        content: `<b>${n.toLocaleString()}</b> more people 
-          ${attrs.netDirection === "inflow" ? "moved into" : "left"} <b>${attrs.destinationName}</b> 
-          than ${attrs.netDirection === "inflow" ? "left" : "moved in"}.`
+    return [{
+      attributes: {
+        ...attrs,
+        nValue,
+        AGI: getStateFlowAgi(attrs, flowDirection, year),
+        originName,
+        destinationName,
+        Origin_X: originPt.x,
+        Origin_Y: originPt.y,
+        Destination_X: destinationPt.x,
+        Destination_Y: destinationPt.y
       }
-    }));
+    }];
   });
+}
 
-  updateMigrationSummaryPanel();
+function buildCountyFlowFeaturesFromRelatedRecords(relatedRecords, selectedAttrs, flowDirection, year, centroidCache) {
+  const selectedCountyFips = normalizeFipsForGeo(selectedAttrs.countyfips, "county");
+  const selectedCountyName = String(getFirstValue(selectedAttrs, ["NAME", "name"]) ?? "Selected county");
+  const selectedCountyStateAbbr = String(getFirstValue(selectedAttrs, ["State", "STATE_ABBR", "state"]) ?? "").trim();
+
+  return relatedRecords.flatMap((record) => {
+    const attrs = record.attributes || {};
+    const partnerFips = getCountyPartnerFips(attrs, flowDirection, year);
+    if (!partnerFips || isSpecialCountyCode(partnerFips)) {
+      return [];
+    }
+
+    const nValue = getStateFlowValue(attrs, flowDirection, year);
+    if (!Number.isFinite(nValue) || nValue <= 0) {
+      return [];
+    }
+
+    const originFips = flowDirection === "outflow" ? selectedCountyFips : partnerFips;
+    const destinationFips = flowDirection === "outflow" ? partnerFips : selectedCountyFips;
+    const originPt = centroidCache[originFips];
+    const destinationPt = centroidCache[destinationFips];
+    if (!originPt || !destinationPt) {
+      return [];
+    }
+
+    const partnerName = getCountyPartnerName(attrs, flowDirection, year) || centroidCache[partnerFips]?.name || partnerFips;
+    const partnerStateAbbr = getCountyPartnerStateAbbr(attrs, flowDirection, year) || centroidCache[partnerFips]?.stateAbbr || "";
+    const originName = flowDirection === "outflow" ? selectedCountyName : partnerName;
+    const destinationName = flowDirection === "outflow" ? partnerName : selectedCountyName;
+    const originStateAbbr = flowDirection === "outflow" ? selectedCountyStateAbbr : partnerStateAbbr;
+    const destinationStateAbbr = flowDirection === "outflow" ? partnerStateAbbr : selectedCountyStateAbbr;
+
+    return [{
+      attributes: {
+        ...attrs,
+        nValue,
+        AGI: getStateFlowAgi(attrs, flowDirection, year),
+        originName,
+        destinationName,
+        y1_countyname: originName,
+        y1_state: originStateAbbr,
+        y2_countyname: destinationName,
+        y2_state: destinationStateAbbr,
+        Origin_X: originPt.x,
+        Origin_Y: originPt.y,
+        Destination_X: destinationPt.x,
+        Destination_Y: destinationPt.y
+      }
+    }];
+  });
+}
+
+export async function handleOutflow(polygonGraphic, view, statePolygonLayer, countyPolygonLayer, year = "2223") {
+  if (!isMigrationEnabled()) return;
+
+  if (appState.geoLevel === "county" && polygonGraphic && polygonGraphic.geometry && view) {
+    await view.goTo({
+      target: polygonGraphic.geometry,
+      zoom: 6
+    });
+  }
+
+  const objectId = polygonGraphic.attributes.OBJECTID;
+  const layer = polygonGraphic.layer;
+
+  const result = await layer.queryFeatures({
+    objectIds: [objectId],
+    outFields: ["*"]
+  });
+  if (result.features.length > 0) {
+    const attrs = result.features[0].attributes;
+
+    if (!shouldUseRelatedTableFlowLines(appState.geoLevel)) {
+      console.warn(`Related-table flow lines are disabled for ${appState.geoLevel}; rendering no lines.`);
+      appState.allRelatedFeatures = [];
+      drawLines([], appState.minValue, attrs.NAME, attrs.State);
+      return;
+    }
+
+    const flowFeatures = appState.geoLevel === "state"
+      ? await tryBuildStateFlowFromRelatedTable(layer, objectId, attrs, "outflow", year, statePolygonLayer, countyPolygonLayer)
+      : await tryBuildCountyFlowFromRelatedTable(layer, objectId, attrs, "outflow", year, statePolygonLayer, countyPolygonLayer);
+
+    appState.allRelatedFeatures = Array.isArray(flowFeatures) ? flowFeatures : [];
+    appState.selectedStateName = attrs.NAME;
+    appState.selectedCountyName = attrs.NAME;
+    appState.selectedCountyAbbr = attrs.State;
+    drawLines(appState.allRelatedFeatures, appState.minValue, attrs.NAME, attrs.State);
+  }
+}
+
+export async function handleInflow(polygonGraphic, view, statePolygonLayer, countyPolygonLayer, year = "2223") {
+  if (!isMigrationEnabled()) return;
+
+  if (appState.geoLevel === "county" && polygonGraphic && polygonGraphic.geometry && view) {
+    await view.goTo({
+      target: polygonGraphic.geometry,
+      zoom: 6
+    });
+  }
+
+  const objectId = polygonGraphic.attributes.OBJECTID;
+  const layer = polygonGraphic.layer;
+
+  const result = await layer.queryFeatures({
+    objectIds: [objectId],
+    outFields: ["*"]
+  });
+  if (result.features.length > 0) {
+    const attrs = result.features[0].attributes;
+
+    if (!shouldUseRelatedTableFlowLines(appState.geoLevel)) {
+      console.warn(`Related-table flow lines are disabled for ${appState.geoLevel}; rendering no lines.`);
+      appState.allRelatedFeatures = [];
+      drawLines([], appState.minValue, attrs.NAME, attrs.State);
+      return;
+    }
+
+    const flowFeatures = appState.geoLevel === "state"
+      ? await tryBuildStateFlowFromRelatedTable(layer, objectId, attrs, "inflow", year, statePolygonLayer, countyPolygonLayer)
+      : await tryBuildCountyFlowFromRelatedTable(layer, objectId, attrs, "inflow", year, statePolygonLayer, countyPolygonLayer);
+
+    appState.allRelatedFeatures = Array.isArray(flowFeatures) ? flowFeatures : [];
+    appState.selectedStateName = attrs.NAME;
+    appState.selectedCountyName = attrs.NAME;
+    appState.selectedCountyAbbr = attrs.State;
+    drawLines(appState.allRelatedFeatures, appState.minValue, attrs.NAME, attrs.State);
+  }
 }
 
 export async function updateHighlightFlow(
@@ -381,7 +514,7 @@ export async function updateHighlightFlow(
   geoLevel,
   relationshipId = 0,
   threshold,
-  year = "2021"
+  year = "2223"
 ) {
 
   const layer = geoLevel === "state" ? stateLayer : countyLayer;
@@ -397,7 +530,8 @@ export async function updateHighlightFlow(
   const normalizeSpecialCode = (value) => String(value ?? "").trim().replace(/^0+/, "");
   const isSpecialCode = (value) => {
     const code = normalizeSpecialCode(value);
-    return code === "96" || code === "97" || code.startsWith("96") || code.startsWith("97");
+    const blockedPrefixes = ["57", "58", "59", "96", "97"];
+    return blockedPrefixes.some((prefix) => code.startsWith(prefix));
   };
   const normalizedSelectedFips = normalizeFips(selectedStateFips);
 

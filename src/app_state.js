@@ -9,7 +9,7 @@ export const appState = {
   hawaiiView: null,
   linesLayer: null,
   pointsLayer: null,
-  flowDirection: "outflow", // or inflow or net
+  flowDirection: "outflow", // or inflow
   selectedStateName: null,
   selectedLineAttributes: null,
   selectedStatePair: null,
@@ -31,5 +31,19 @@ export const appState = {
   stateThreshold: 15000,
   countyThreshold: 100,
   highlightEnabled: false,
-  lineHoverPopupEnabled: false
+  rendererModeActive: false,
+  lineHoverPopupEnabled: false,
+  animateFlowLines: false,
+  useDerivedFlowEndpoints: false,
+  useJsonCentroidLookup: true,
+  centroidJsonUrls: {
+    state: `${import.meta.env.BASE_URL}state_centroids.json`,
+    county: `${import.meta.env.BASE_URL}county_centroids.json`,
+  },
+  stateCentroidCache: {},
+  countyCentroidCache: {},
+  useRelatedTableFlowLines: {
+    state: true,
+    county: true,
+  },
 };

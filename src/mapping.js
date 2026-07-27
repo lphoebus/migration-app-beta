@@ -144,7 +144,7 @@ export function getFieldName(fieldObj, year) {
 }
 
 // --- UI Wiring for Migration Mapping ---
-export function setupMigrationMappingUI({ mapId = "mainMap", getTargetLayers }) {
+export function setupMigrationMappingUI({ mapId = "mainMap", getTargetLayers, onRendererModeChange = () => {} }) {
   const mapEl = document.getElementById(mapId);
   const yearSelect = document.getElementById("analysis-year-select");
   const resetRendererBtn = document.getElementById("reset-renderer-btn");
@@ -303,6 +303,7 @@ export function setupMigrationMappingUI({ mapId = "mainMap", getTargetLayers }) 
 
   function renderMigration(type) {
     activeRendererMode = type;
+    onRendererModeChange(true);
     const year = getYear();
     let fieldObj;
     if (type === "inflow") fieldObj = allFields[0];
@@ -315,6 +316,7 @@ export function setupMigrationMappingUI({ mapId = "mainMap", getTargetLayers }) 
 
   function renderRate(type) {
     activeRendererMode = type;
+    onRendererModeChange(true);
     const year = getYear();
     let fieldObj;
     if (type === "rate-inflow") fieldObj = allFields[3];
@@ -352,6 +354,7 @@ export function setupMigrationMappingUI({ mapId = "mainMap", getTargetLayers }) 
         window.__resetSwipeCompareState();
       }
       activeRendererMode = null;
+      onRendererModeChange(false);
       resetToOriginalRenderers();
       clearDynamicLegend();
     };

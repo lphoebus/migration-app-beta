@@ -1,9 +1,30 @@
 import { appState } from "./app_state";
 import Graphic from "@arcgis/core/Graphic";
 
+const maxAnimatedRoutes = 15;
+const routeMinSpeed = 25;
+const routeMaxSpeed = 100;
+
+function getRouteAnimationSpeed(nValue, minValue, maxValue) {
+  const midpoint = (routeMinSpeed + routeMaxSpeed) / 2;
+  if (!Number.isFinite(nValue)) return midpoint;
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue) || maxValue <= minValue) {
+    return midpoint;
+  }
+
+  const ratio = (nValue - minValue) / (maxValue - minValue);
+  const clampedRatio = Math.max(0, Math.min(1, ratio));
+  return routeMinSpeed + (routeMaxSpeed - routeMinSpeed) * clampedRatio;
+}
+
+export function stopFlowLineAnimation() {
+  return;
+}
+
 
 // Draw migration lines/arrows on the main map only
 export function drawLines(features, minValue, selectedStateName, selectedCountyAbbr) {
+  stopFlowLineAnimation();
   appState.linesLayer.removeAll();
   appState.pointsLayer.removeAll();
 
@@ -21,8 +42,12 @@ export function drawLines(features, minValue, selectedStateName, selectedCountyA
   );
 
   // maxValue only from LINE features so opacity scaling is not skewed
-  const nValues = lineFeatures.map(f => f.attributes.nValue);
-  const maxValue = Math.max(...nValues);
+  const nValues = lineFeatures.map(f => Number(f.attributes.nValue || 0)).filter((value) => Number.isFinite(value) && value > 0);
+  const maxValue = nValues.length ? Math.max(...nValues) : 1;
+  const minLineValue = nValues.length ? Math.min(...nValues) : 0;
+  const animatedThreshold = nValues.length
+    ? [...nValues].sort((a, b) => b - a)[Math.min(maxAnimatedRoutes - 1, nValues.length - 1)]
+    : Infinity;
 
   const lineGraphics = [];
   const pointGraphics = [];
@@ -49,7 +74,7 @@ export function drawLines(features, minValue, selectedStateName, selectedCountyA
     const pointSymbol = {
       type: "simple-marker",
       color: color,
-      size: Math.min(20, Math.max(6, Math.log10(n) * 3)),
+      size: 18, //Math.min(20, Math.max(6, Math.log10(n) * 3)),
       outline: { color: [255, 255, 255], width: 1 }
     };
 
@@ -69,10 +94,6 @@ export function drawLines(features, minValue, selectedStateName, selectedCountyA
     let destinationX = feature.attributes.Destination_X;
     let destinationY = feature.attributes.Destination_Y;
 
-    if (appState.flowDirection === "inflow") {
-      [originX, originY, destinationX, destinationY] = [destinationX, destinationY, originX, originY];
-    }
-
     const opacity = Math.min(255, Math.max(60, (n / maxValue) * 255));
     let color = appState.flowDirection === "outflow"
       ? [25, 72, 130, opacity]
@@ -88,26 +109,15 @@ export function drawLines(features, minValue, selectedStateName, selectedCountyA
 
     // Scale width and opacity by volume
     const width = Math.min(10, Math.max(1, Math.log10(n) - 1));
-    const arrowSize = Math.min(20, Math.max(6, Math.log10(n) * 3));
+    const arrowSize = Math.min(18, Math.max(6, Math.log10(n) * 3));
 
-    let arrowGeometry, frame;
-    if (appState.flowDirection === "inflow") {
-      arrowGeometry = [
-        [0, 0],
-        [8, -5.47],
-        [8, 5.6],
-        [0, 0]
-      ];
-      frame = { xmin: 24, ymin: -6, xmax: -6, ymax: 6 };
-    } else {
-      arrowGeometry = [
-        [0, 0],
-        [-8, -5.47],
-        [-8, 5.6],
-        [0, 0]
-      ];
-      frame = { xmin: -12, ymin: -6, xmax: 0, ymax: 6 };
-    }
+    const arrowGeometry = [
+      [0, 0],
+      [-8, -5.47],
+      [-8, 5.47],
+      [0, 0]
+    ];
+    const frame = { xmin: -8, ymin: -5.47, xmax: 0, ymax: 5.47 };
 
     const symbolLayers = [
       {
@@ -117,6 +127,9 @@ export function drawLines(features, minValue, selectedStateName, selectedCountyA
         color: color
       }
     ];
+
+    const shouldAnimateRoute = appState.animateFlowLines && n >= animatedThreshold;
+    const animationSpeed = getRouteAnimationSpeed(n, minLineValue, maxValue);
 
     // Add arrow for both inflow and outflow
     symbolLayers.push({
@@ -128,7 +141,8 @@ export function drawLines(features, minValue, selectedStateName, selectedCountyA
         endings: "WithMarkers",
         placementTemplate: [100],
         angleToLine: true,
-        controlPointPlacement: "withControlPoint"
+        offset: 0,
+        controlPointsPlacement: "NoConstraint"
       },
       frame: frame,
       markerGraphics: [
@@ -149,14 +163,32 @@ export function drawLines(features, minValue, selectedStateName, selectedCountyA
       ]
     });
 
+    const lineSymbolData = {
+      type: "CIMLineSymbol",
+      symbolLayers,
+      animations: shouldAnimateRoute ? [
+        {
+          type: "CIMSymbolAnimationMoveAlongLine",
+          movementType: "Speed",
+          //distanceAlong: 10,
+          speed: animationSpeed,
+          continuous: true
+        }
+      ] : undefined,
+      animatedSymbolProperties: shouldAnimateRoute ? {
+        playAnimation: true,
+        repeatType: "Loop",
+        easing: "Linear",
+        randomizeStartTime: true,
+        randomizeStartSeed: 13
+      } : undefined
+    };
+
     const arrowSymbol = {
       type: "cim",
       data: {
         type: "CIMSymbolReference",
-        symbol: {
-          type: "CIMLineSymbol",
-          symbolLayers: symbolLayers
-        }
+        symbol: lineSymbolData
       }
     };
 
@@ -222,6 +254,7 @@ export function drawLines(features, minValue, selectedStateName, selectedCountyA
   if (pointGraphics.length) {
     appState.pointsLayer.addMany(pointGraphics);
   }
+
 }
 
 export function highlightFeature(feature, view) {
