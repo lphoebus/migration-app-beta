@@ -48,16 +48,19 @@ function getFirstValue(attributes, fieldNames = []) {
   return undefined;
 }
 
-function isSpecialStateCode(value) {
+export const SPECIAL_FLOW_PREFIXES = ["57", "58", "59", "96", "97", "98"];
+
+export function isSpecialFlowCode(value) {
   const code = String(value ?? "").trim().replace(/^0+/, "");
-  const blockedPrefixes = ["57", "58", "59", "96", "97", "98"];
-  return blockedPrefixes.some((prefix) => code.startsWith(prefix));
+  return SPECIAL_FLOW_PREFIXES.some((prefix) => code.startsWith(prefix));
+}
+
+function isSpecialStateCode(value) {
+  return isSpecialFlowCode(value);
 }
 
 function isSpecialCountyCode(value) {
-  const code = String(value ?? "").trim().replace(/^0+/, "");
-  const blockedPrefixes = ["57", "58", "59", "96", "97", "98"];
-  return blockedPrefixes.some((prefix) => code.startsWith(prefix));
+  return isSpecialFlowCode(value);
 }
 
 async function loadCentroidsFromJsonIntoCache(geoLevel, requestedFips = []) {
@@ -257,9 +260,21 @@ function getStateFlowAgi(attributes, flowDirection, year) {
   return Number.isFinite(value) ? value : 0;
 }
 
-function getStatePartnerFips(attributes) {
+function getStatePartnerFips(attributes, flowDirection, year = "2223") {
+  const directionalCandidates = flowDirection === "inflow"
+    ? ["y1_state_fips", "y1_statefips", "origin_state_fips"]
+    : flowDirection === "outflow"
+      ? ["y2_state_fips", "y2_statefips", "destination_state_fips"]
+      : [];
+  const partnerCandidates = addYearFieldVariants([
+    "partner_statefips",
+    "partner_fips",
+    "partnerStateFips"
+  ], year);
+  const directionalCandidatesWithYear = addYearFieldVariants(directionalCandidates, year);
+
   return normalizeFipsForGeo(
-    getFirstValue(attributes, ["partner_statefips", "partner_fips", "partnerStateFips"]),
+    getFirstValue(attributes, [...partnerCandidates, ...directionalCandidatesWithYear]),
     "state"
   );
 }
@@ -337,7 +352,7 @@ function buildStateFlowFeaturesFromRelatedRecords(relatedRecords, selectedAttrs,
 
   return relatedRecords.flatMap((record) => {
     const attrs = record.attributes || {};
-    const partnerFips = getStatePartnerFips(attrs);
+    const partnerFips = getStatePartnerFips(attrs, flowDirection, year);
     if (!partnerFips || isSpecialStateCode(partnerFips)) {
       return [];
     }
@@ -519,7 +534,6 @@ export async function updateHighlightFlow(
 
   const layer = geoLevel === "state" ? stateLayer : countyLayer;
   const fipsField = geoLevel === "state" ? "statefips" : "countyfips";
-  const partnerFipsField = geoLevel === "state" ? "partner_statefips" : "partner_countyfips";
   const inflowField = `IN_n2_${year}`;
   const outflowField = `OUT_n2_${year}`;
   const normalizeFips = (value) => {
@@ -527,13 +541,12 @@ export async function updateHighlightFlow(
     if (!text) return "";
     return geoLevel === "state" ? text.padStart(2, "0") : text.padStart(5, "0");
   };
-  const normalizeSpecialCode = (value) => String(value ?? "").trim().replace(/^0+/, "");
-  const isSpecialCode = (value) => {
-    const code = normalizeSpecialCode(value);
-    const blockedPrefixes = ["57", "58", "59", "96", "97"];
-    return blockedPrefixes.some((prefix) => code.startsWith(prefix));
-  };
   const normalizedSelectedFips = normalizeFips(selectedStateFips);
+  const getPartnerFipsFromRecord = (attributes = {}) => (
+    geoLevel === "state"
+      ? getStatePartnerFips(attributes, flowType, year)
+      : getCountyPartnerFips(attributes, flowType, year)
+  );
 
   if (typeof layer.queryRelatedFeatures !== "function") {
     console.error("State layer does not support queryRelatedFeatures");
@@ -549,9 +562,9 @@ export async function updateHighlightFlow(
 
   // Filter by direction
   const validRecords = relatedRecords.filter((rec) => {
-    const partner = normalizeFips(rec.attributes[partnerFipsField]);
+    const partner = getPartnerFipsFromRecord(rec.attributes || {});
     return (
-      !isSpecialCode(partner) &&
+      !isSpecialFlowCode(partner) &&
       partner !== normalizedSelectedFips
     );
   });
@@ -577,7 +590,7 @@ export async function updateHighlightFlow(
 
   const selectedRecords = validRecords.filter((rec) => recordValue(rec) > threshold);
 
-  const highlightFips = [...new Set(selectedRecords.map((rec) => normalizeFips(rec.attributes[partnerFipsField]))).values()].filter(Boolean);
+  const highlightFips = [...new Set(selectedRecords.map((rec) => getPartnerFipsFromRecord(rec.attributes || {}))).values()].filter(Boolean);
 
   const totalValidValue = validRecords.reduce((sum, rec) => sum + recordValue(rec), 0);
   const selectedValue = selectedRecords.reduce((sum, rec) => sum + recordValue(rec), 0);
@@ -604,8 +617,8 @@ export async function updateHighlightFlow(
   [...selectedRecords]
     .sort((a, b) => recordValue(b) - recordValue(a))
     .forEach((rec) => {
-      const fips = normalizeFips(rec.attributes[partnerFipsField]);
-      if (!fips || isSpecialCode(fips) || seenContributorFips.has(fips) || topContributorRecords.length >= 4) return;
+      const fips = getPartnerFipsFromRecord(rec.attributes || {});
+      if (!fips || isSpecialFlowCode(fips) || seenContributorFips.has(fips) || topContributorRecords.length >= 4) return;
       if (!fipsToName[fips]) return;
       seenContributorFips.add(fips);
       topContributorRecords.push({

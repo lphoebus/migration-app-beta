@@ -42,6 +42,7 @@ let updateHighlightFlow = async () => ({
   representedPct: 0,
   topContributors: []
 });
+let isSpecialFlowCode = () => false;
 
 let uiModulePromise;
 const loadUiModule = () => {
@@ -146,6 +147,7 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
   const { drawLines, stopFlowLineAnimation } = drawModule;
   const { handleOutflow, handleInflow } = migrationModule;
   updateHighlightFlow = migrationModule.updateHighlightFlow;
+  isSpecialFlowCode = migrationModule.isSpecialFlowCode;
   const { setupFeatureInfoClick, setupLineHoverPopup } = interactionsModule;
   const { setupMigrationMappingUI } = mappingModule;
   const { createFlowDirectionChart } = flowDirectionChartModule;
@@ -519,12 +521,6 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     return geoLevel === "state" ? text.padStart(2, "0") : text.padStart(5, "0");
   };
 
-  const isSpecialFlowCode = (value, geoLevel) => {
-    const code = String(value ?? "").trim().replace(/^0+/, "");
-    const blockedPrefixes = ["57", "58", "59", "96", "97"];
-    return blockedPrefixes.some((prefix) => code.startsWith(prefix));
-  };
-
   const looksLikeFipsLabel = (value, geoLevel) => {
     const text = String(value ?? "").trim();
     if (!text) return false;
@@ -557,6 +553,35 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     const tokens = getRelatedFieldYearTokens(year);
     const yearVariants = fieldNames.flatMap((fieldName) => tokens.map((token) => `${fieldName}_${token}`));
     return [...new Set([...fieldNames, ...yearVariants])];
+  };
+
+  const getFeaturePartnerFips = (attributes = {}, geoLevel, flowDirection, year = "2223") => {
+    const directionalPartnerFipsCandidates = geoLevel === "state"
+      ? (flowDirection === "inflow"
+        ? ["y1_state_fips", "y1_statefips", "origin_state_fips"]
+        : ["y2_state_fips", "y2_statefips", "destination_state_fips"])
+      : (flowDirection === "inflow"
+        ? ["y1_county_fips", "y1_countyfips", "origin_county_fips"]
+        : ["y2_county_fips", "y2_countyfips", "destination_county_fips"]);
+
+    const directionalPartnerFipsCandidatesWithYear = addYearFieldVariants(directionalPartnerFipsCandidates, year);
+    const partnerFipsCandidates = geoLevel === "state"
+      ? [...addYearFieldVariants(["partner_statefips", "partner_fips", "partnerStateFips"], year), ...directionalPartnerFipsCandidatesWithYear]
+      : [...addYearFieldVariants(["partner_countyfips", "partner_fips", "partnerCountyFips"], year), ...directionalPartnerFipsCandidatesWithYear];
+
+    return normalizeFipsForGeo(getFirstFieldValue(attributes, partnerFipsCandidates), geoLevel);
+  };
+
+  const getFeaturePartnerName = (attributes = {}, geoLevel, flowDirection, year = "2223") => {
+    const partnerNameCandidates = geoLevel === "state"
+      ? (flowDirection === "inflow"
+        ? ["y1_state_name", "partner_state_name", "originName", "NAME", "name"]
+        : ["y2_state_name", "partner_state_name", "destinationName", "NAME", "name"])
+      : (flowDirection === "inflow"
+        ? ["y1_countyname", "y1_county_name", "partner_county_name", "partner_countyname", "originName", "NAME", "name"]
+        : ["y2_countyname", "y2_county_name", "partner_county_name", "partner_countyname", "destinationName", "NAME", "name"]);
+
+    return String(getFirstFieldValue(attributes, addYearFieldVariants(partnerNameCandidates, year)) ?? "").trim();
   };
 
   const getNonMigrantsValue = (attributes = {}, year = "2223") => {
@@ -800,8 +825,35 @@ mainMap.addEventListener("arcgisViewReadyChange", async () => {
     }
 
     if (analysisTopFlows) {
+      const selectedGeoFips = normalizeFipsForGeo(
+        appState.geoLevel === "county"
+          ? appState.lastPolygonGraphic?.attributes?.countyfips
+          : appState.lastPolygonGraphic?.attributes?.statefips,
+        appState.geoLevel
+      );
       const topFlows = [...(appState.allRelatedFeatures || [])]
-        .filter((feature) => !isSelfMigrationFeature(feature.attributes))
+        .filter((feature) => {
+          const nValue = Number(feature.attributes?.nValue || 0);
+          const partnerFips = getFeaturePartnerFips(
+            feature.attributes || {},
+            appState.geoLevel,
+            appState.flowDirection,
+            selectedYear
+          );
+          const partnerName = getFeaturePartnerName(
+            feature.attributes || {},
+            appState.geoLevel,
+            appState.flowDirection,
+            selectedYear
+          );
+          return Number.isFinite(nValue)
+            && nValue > 0
+            && nValue >= appState.minValue
+            && !isSpecialFlowCode(partnerFips)
+            && partnerFips !== selectedGeoFips
+            && !partnerName.toLowerCase().includes("non-migrant")
+            && !isSelfMigrationFeature(feature.attributes);
+        })
         .sort((a, b) => Number(b.attributes?.nValue || 0) - Number(a.attributes?.nValue || 0))
         .slice(0, 3)
         .map((feature) => {

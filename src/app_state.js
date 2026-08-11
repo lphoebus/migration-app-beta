@@ -34,7 +34,6 @@ export const appState = {
   rendererModeActive: false,
   lineHoverPopupEnabled: false,
   animateFlowLines: false,
-  useDerivedFlowEndpoints: false,
   useJsonCentroidLookup: true,
   centroidJsonUrls: {
     state: `${import.meta.env.BASE_URL}state_centroids.json`,
