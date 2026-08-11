@@ -36,7 +36,7 @@ Source: https://www.irs.gov/statistics/soi-tax-stats-migration-data
 
 ## Live App
 
-This app is published through GitHub Pages from the project repository.
+This app is published through GitHub Pages https://lphoebus.github.io/migration-app-beta/.
 
 ## Status
 
